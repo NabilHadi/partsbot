@@ -15,7 +15,9 @@
     "migrate": "tsx src/db/migrate.ts",
     "mock": "tsx src/mock/oneepc-mock.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "chat": "tsx src/scripts/chat.ts",
+    "templates": "tsx src/scripts/print-templates.ts > docs/bot-templates.md"
   },
   "dependencies": {
     "@zernio/node": "0.2.1325",
