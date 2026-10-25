@@ -1,10 +1,6 @@
 import PgBoss from "pg-boss";
 import { loadConfig } from "./config.js";
-
-/** Queue names, kept in one place. */
-export const QUEUES = {
-  inboundMessage: "inbound-message",
-} as const;
+import { QUEUES } from "./queues.js";
 
 const config = loadConfig();
 const boss = new PgBoss({ connectionString: config.DATABASE_URL });
@@ -16,7 +12,8 @@ await boss.createQueue(QUEUES.inboundMessage);
 // Placeholder handler: the real pipeline (debounce, gate checks, extract, decode, search, reply) goes here.
 await boss.work(QUEUES.inboundMessage, async (jobs) => {
   for (const job of jobs) {
-    console.log(`job ${job.id} on ${QUEUES.inboundMessage}`, job.data);
+    // Ids only: job.data holds customer message text and phone numbers (PDPL), never log it.
+    console.log(`job ${job.id} on ${QUEUES.inboundMessage}`);
   }
 });
 console.log("worker started");

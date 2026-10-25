@@ -11,4 +11,11 @@ describe("loadConfig", () => {
   it("throws a readable error when required vars are missing", () => {
     expect(() => loadConfig({})).toThrow(/DATABASE_URL/);
   });
+
+  it("keeps Zernio settings optional and enforces a minimum webhook secret length", () => {
+    const base = { DATABASE_URL: "postgres://x", ONEEPC_API_KEY: "k" };
+    expect(loadConfig(base).ZERNIO_WEBHOOK_SECRET).toBeUndefined();
+    expect(loadConfig({ ...base, ZERNIO_WEBHOOK_SECRET: "0123456789abcdef" }).ZERNIO_WEBHOOK_SECRET).toBe("0123456789abcdef");
+    expect(() => loadConfig({ ...base, ZERNIO_WEBHOOK_SECRET: "short" })).toThrow(/ZERNIO_WEBHOOK_SECRET/);
+  });
 });

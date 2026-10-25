@@ -1,11 +1,14 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Db } from "./db/pool.js";
+import { zernioWebhookRoutes, type ZernioWebhookDeps } from "./routes/zernio-webhook.js";
 
 export interface ServerDeps {
   /** Optional: when provided, /health also checks the database. Tests omit it. */
   db?: Db;
   /** Fastify logger option; pass false to silence in tests. */
   logger?: boolean;
+  /** When provided, mounts POST /webhooks/zernio. Omit to leave the route off. */
+  zernio?: ZernioWebhookDeps;
 }
 
 /** App factory: builds the Fastify instance without listening, so tests can use inject(). */
@@ -22,6 +25,8 @@ export function buildServer(deps: ServerDeps = {}): FastifyInstance {
       return reply.code(503).send({ status: "degraded", db: "down" });
     }
   });
+
+  if (deps.zernio) void app.register(zernioWebhookRoutes(deps.zernio));
 
   return app;
 }

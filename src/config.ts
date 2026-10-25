@@ -5,6 +5,12 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   ONEEPC_BASE_URL: z.string().url().default("http://localhost:4010/api/bot/v1"),
   ONEEPC_API_KEY: z.string().min(1),
+  // Zernio (WhatsApp). Optional so the worker/mock/tests need none of them; the API only
+  // mounts the webhook route when ZERNIO_WEBHOOK_SECRET is set (see main.ts).
+  ZERNIO_API_KEY: z.string().min(1).optional(),
+  ZERNIO_WEBHOOK_SECRET: z.string().min(16, "use at least 16 characters").optional(),
+  /** Zernio accountId of the connected WhatsApp number; events for other accounts are ignored. */
+  ZERNIO_ACCOUNT_ID: z.string().min(1).optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
