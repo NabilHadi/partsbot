@@ -19,6 +19,10 @@ import {
   readCookie, sessionCookieHeader, type Session,
 } from "./auth.js";
 import { CSS, bidi, html, layout, raw, riyadhTime, type Raw } from "./html.js";
+import {
+  SynonymInputError, addSynonym, approveSuggestion, deleteSynonym, listSuggestions, listSynonyms, rejectSuggestion, updateSynonym,
+  type SuggestionRow, type SynonymRow,
+} from "../ai/synonym-repo.js";
 import { SETTINGS_FIELDS, applySettingsForm, diffConfig, formValuesFromRaw, type FieldErrors, type FormValues } from "./settings-form.js";
 
 export interface AppStatusInfo {
@@ -32,6 +36,8 @@ export interface AppStatusInfo {
   version: string;
   commit: string;
   queueName: string;
+  /** AI layer (never the key itself). Absent = the row says "not wired". */
+  ai?: { enabled: boolean; reason: string | null; provider: string; model: string; fallbackModel: string | null; keyConfigured: boolean };
 }
 
 export interface AdminDeps {
@@ -48,6 +54,10 @@ export interface AdminDeps {
   /** GET /status on the real API (with the key) and on the mock. When set, replaces the bare reachability probe. */
   oneepcCheck?: () => Promise<{ real: OneEpcCheck; mock: OneEpcCheck | null }>;
   maxUploadBytes?: number;
+  /** Live AI check (is the model reachable with the key?). Never returns the key. */
+  aiCheck?: () => Promise<{ ok: boolean; detail: string }>;
+  /** Called after an admin edit of the synonym list (drops the server's cache). */
+  onSynonymsChanged?: () => void;
 }
 
 interface ShopRow {
@@ -63,7 +73,13 @@ const FLASH: Record<string, { kind: "ok" | "error"; text: string }> = {
   staffAdded: { kind: "ok", text: "Staff member added." },
   staffRemoved: { kind: "ok", text: "Staff member removed." },
   imported: { kind: "ok", text: "Stock imported." },
+  synAdded: { kind: "ok", text: "Synonym added. The bot uses it within a minute." },
+  synSaved: { kind: "ok", text: "Synonym saved. The bot uses it within a minute." },
+  synDeleted: { kind: "ok", text: "Synonym deleted." },
+  sugApproved: { kind: "ok", text: "Suggestion approved and added to the list." },
+  sugRejected: { kind: "ok", text: "Suggestion rejected." },
 };
+const ROW_ID = /^\d{1,18}$/;
 
 async function defaultProbe(url: string): Promise<string> {
   try {
@@ -253,7 +269,7 @@ ${textField("zernio_account_id", "Zernio account id", v.zernio_account_id ?? "",
     try {
       const r = await deps.db.query<{ id: string }>(
         "INSERT INTO shops (name, city, zernio_account_id, config) VALUES ($1, $2, $3, $4) RETURNING id",
-        [b.name!.trim(), b.city?.trim() || null, b.zernio_account_id?.trim() || null, b.test ? { testShop: true } : {}],
+        [b.name!.trim(), b.city?.trim() || null, b.zernio_account_id?.trim() || null, b.test ? { testShop: true, aiEnabled: true } : {}],
       );
       const id = (r.rows[0] as { id: string }).id;
       await audit(req, "shop.create", id, { name: b.name!.trim(), testShop: !!b.test });
@@ -478,6 +494,118 @@ ${auditTable(auditRows.rows.map((a) => ({ ...a, shop_name: null })), false)}`;
     }
   });
 
+  // ---------- synonyms (deterministic layer; the AI never edits it) ----------
+  const synonymsPage = async (req: FastifyRequest, reply: FastifyReply, flash: { kind: "ok" | "error"; text: string } | null, code = 200, addValues: Record<string, string> = {}) => {
+    const [rows, pending] = await Promise.all([listSynonyms(deps.db), listSuggestions(deps.db, "pending")]);
+    const review = rows.filter((r) => r.needs_review).length;
+    return page(reply, req, "Synonyms", html`<p class="muted">Customer words → the catalogue name searched in OneEPC. This list always wins over the AI. The AI only <em>suggests</em> new words below; nothing is added until you approve it.</p>
+<h2>AI suggestions waiting for review (${pending.length})</h2>
+${suggestionsTable(req, pending)}
+<h2>Add a synonym</h2>
+<form method="post" action="/admin/synonyms" class="card">${csrfField(req)}
+<div class="grid">${textField("term", "Customer word(s)", addValues.term ?? "", {}, "e.g. قماشات", true)}
+${textField("canonical_ar", "Catalogue name (Arabic)", addValues.canonical_ar ?? "", {}, "e.g. فحمات فرامل", true)}
+${textField("canonical_en", "Catalogue name (English)", addValues.canonical_en ?? "", {}, "e.g. brake pads")}</div>
+<p><button>Add</button></p></form>
+<h2>The list (${rows.length}${review ? `, ${review} seed entries still to review` : ""})</h2>
+${synonymsTable(req, rows)}`, flash, code);
+  };
+
+  app.get("/admin/synonyms", async (req, reply) => synonymsPage(req, reply, flashFrom(req)));
+
+  const synInput = (b: Record<string, string>) => ({
+    term: b.term ?? "", canonicalAr: b.canonical_ar ?? "", canonicalEn: b.canonical_en ?? "",
+    status: b.status === "disabled" ? ("disabled" as const) : ("active" as const), needsReview: b.needs_review === "1",
+  });
+  const synChanged = () => deps.onSynonymsChanged?.();
+
+  app.post("/admin/synonyms", async (req, reply) => {
+    const b = strings(req.body);
+    try {
+      const id = await addSynonym(deps.db, synInput(b));
+      await audit(req, "synonym.add", null, { id, term: b.term?.trim(), canonicalAr: b.canonical_ar?.trim(), canonicalEn: b.canonical_en?.trim() });
+    } catch (err) {
+      if (err instanceof SynonymInputError) return synonymsPage(req, reply, { kind: "error", text: err.message }, 400, b);
+      throw err;
+    }
+    synChanged();
+    return reply.redirect("/admin/synonyms?ok=synAdded", 303);
+  });
+
+  app.post("/admin/synonyms/:id", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!ROW_ID.test(id)) return page(reply, req, "Not found", html`<p>No such synonym.</p>`, null, 404);
+    const b = strings(req.body);
+    const before = (await listSynonyms(deps.db)).find((r) => String(r.id) === id);
+    try {
+      const after = await updateSynonym(deps.db, id, synInput(b));
+      if (!after) return page(reply, req, "Not found", html`<p>No such synonym.</p>`, null, 404);
+      await audit(req, "synonym.update", null, { id, from: before && { term: before.term, canonicalAr: before.canonical_ar, canonicalEn: before.canonical_en, status: before.status, needsReview: before.needs_review }, to: { term: after.term, canonicalAr: after.canonical_ar, canonicalEn: after.canonical_en, status: after.status, needsReview: after.needs_review } });
+    } catch (err) {
+      if (err instanceof SynonymInputError) return synonymsPage(req, reply, { kind: "error", text: err.message }, 400);
+      throw err;
+    }
+    synChanged();
+    return reply.redirect("/admin/synonyms?ok=synSaved", 303);
+  });
+
+  app.post("/admin/synonyms/:id/delete", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!ROW_ID.test(id)) return page(reply, req, "Not found", html`<p>No such synonym.</p>`, null, 404);
+    const gone = await deleteSynonym(deps.db, id);
+    if (!gone) return page(reply, req, "Not found", html`<p>No such synonym.</p>`, null, 404);
+    await audit(req, "synonym.delete", null, { id, term: gone.term, canonicalAr: gone.canonical_ar, canonicalEn: gone.canonical_en });
+    synChanged();
+    return reply.redirect("/admin/synonyms?ok=synDeleted", 303);
+  });
+
+  app.post("/admin/synonym-suggestions/:id/approve", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!ROW_ID.test(id)) return page(reply, req, "Not found", html`<p>No such suggestion.</p>`, null, 404);
+    const b = strings(req.body);
+    try {
+      const r = await approveSuggestion(deps.db, id, { canonicalAr: b.canonical_ar?.trim() || undefined, canonicalEn: b.canonical_en?.trim() || undefined });
+      if (!r) return synonymsPage(req, reply, { kind: "error", text: "That suggestion is no longer pending." }, 409);
+      await audit(req, "synonym.suggestion.approve", null, { suggestionId: id, synonymId: r.synonymId, term: r.suggestion.term, canonicalAr: b.canonical_ar?.trim() || r.suggestion.canonical_ar });
+    } catch (err) {
+      if (err instanceof SynonymInputError) return synonymsPage(req, reply, { kind: "error", text: err.message }, 400);
+      throw err;
+    }
+    synChanged();
+    return reply.redirect("/admin/synonyms?ok=sugApproved", 303);
+  });
+
+  app.post("/admin/synonym-suggestions/:id/reject", async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!ROW_ID.test(id)) return page(reply, req, "Not found", html`<p>No such suggestion.</p>`, null, 404);
+    const r = await rejectSuggestion(deps.db, id);
+    if (!r) return synonymsPage(req, reply, { kind: "error", text: "That suggestion is no longer pending." }, 409);
+    await audit(req, "synonym.suggestion.reject", null, { suggestionId: id, term: r.term, canonicalAr: r.canonical_ar });
+    return reply.redirect("/admin/synonyms?ok=sugRejected", 303);
+  });
+
+  function suggestionsTable(req: FastifyRequest, rows: SuggestionRow[]): Raw {
+    if (!rows.length) return html`<p class="muted">Nothing waiting.</p>`;
+    return html`<table><thead><tr><th>Customer word</th><th>AI's catalogue name (editable)</th><th>Seen</th><th>Last seen</th><th></th></tr></thead><tbody>${rows.map(
+      (r) => html`<tr><td>${bidi(r.term)}</td><td><form method="post" action="/admin/synonym-suggestions/${String(r.id)}/approve" class="inline">${csrfField(req)}
+<input type="text" name="canonical_ar" value="${r.canonical_ar}" dir="auto" aria-label="Arabic name"> <input type="text" name="canonical_en" value="${r.canonical_en}" aria-label="English name"> <button>Approve</button></form></td>
+<td>${r.seen_count}×</td><td>${riyadhTime(r.last_seen)}</td>
+<td><form method="post" action="/admin/synonym-suggestions/${String(r.id)}/reject" class="inline">${csrfField(req)}<button class="danger">Reject</button></form></td></tr>`,
+    )}</tbody></table>`;
+  }
+
+  function synonymsTable(req: FastifyRequest, rows: SynonymRow[]): Raw {
+    if (!rows.length) return html`<p class="muted">The list is empty.</p>`;
+    return html`<table><thead><tr><th>Customer word → catalogue name (Arabic / English), status</th><th>Source</th><th></th></tr></thead><tbody>${rows.map(
+      (r) => html`<tr><td><form method="post" action="/admin/synonyms/${String(r.id)}" class="inline">${csrfField(req)}
+<input type="text" name="term" value="${r.term}" dir="auto" aria-label="Customer word"> → <input type="text" name="canonical_ar" value="${r.canonical_ar}" dir="auto" aria-label="Arabic name"> <input type="text" name="canonical_en" value="${r.canonical_en}" aria-label="English name">
+<select name="status" aria-label="Status"><option${r.status === "active" ? raw(" selected") : ""}>active</option><option${r.status === "disabled" ? raw(" selected") : ""}>disabled</option></select>
+<label class="inline"><input type="checkbox" name="needs_review" value="1"${r.needs_review ? raw(" checked") : ""}> needs review</label> <button>Save</button></form></td>
+<td>${r.source}${r.needs_review ? html` <span class="badge paused">review</span>` : ""}</td>
+<td><form method="post" action="/admin/synonyms/${String(r.id)}/delete" class="inline">${csrfField(req)}<button class="danger">Delete</button></form></td></tr>`,
+    )}</tbody></table>`;
+  }
+
   // ---------- app status + audit ----------
   app.get("/admin/app", async (req, reply) => {
     const s = deps.status;
@@ -510,10 +638,23 @@ ${s.oneepcMockBaseUrl ? html`<tr><th>Mock OneEPC</th><td><code>${s.oneepcMockBas
     } else {
       oneepcRows = html`<tr><th>OneEPC reachability</th><td>${await probe(s.oneepcBaseUrl)}</td></tr>`;
     }
+    let aiRows: Raw = html`<tr><th>AI</th><td class="muted">not wired</td></tr>`;
+    if (s.ai) {
+      const a = s.ai;
+      let live: Raw = html`<span class="muted">not checked</span>`;
+      if (a.enabled && deps.aiCheck) {
+        const c = await deps.aiCheck().catch(() => ({ ok: false, detail: "check failed" }));
+        live = html`<strong>${c.ok ? "OK" : "FAILED"}</strong> <span class="hint">${c.detail}</span>`;
+      }
+      aiRows = html`<tr><th>AI</th><td>${a.enabled ? html`<strong>ON</strong> · ${live}` : html`off <span class="hint">${a.reason === "no_key" ? "AI_ENABLED is on but no API key is configured" : "AI_ENABLED=false"}: rules + templates only</span>`} <span class="hint">each shop also needs “AI assistant” switched on</span></td></tr>
+<tr><th>AI model</th><td>${a.provider} · <code>${a.model}</code>${a.fallbackModel ? html` · retry/fallback <code>${a.fallbackModel}</code>` : ""}</td></tr>
+<tr><th>AI API key configured</th><td>${yes(a.keyConfigured)}</td></tr>`;
+    }
     return page(reply, req, "App status", html`<table><tbody>
 <tr><th>DRY_RUN</th><td>${s.dryRun ? "ON (the bot logs replies and sends nothing)" : "off (replies are sent)"} <span class="hint">as set in the server's environment; the worker is started with the same settings</span></td></tr>
 <tr><th>OneEPC base URL</th><td><code>${s.oneepcBaseUrl}</code></td></tr>
 ${oneepcRows}
+${aiRows}
 <tr><th>Zernio webhook secret configured</th><td>${yes(s.zernioWebhookConfigured)}</td></tr>
 <tr><th>Zernio API key configured</th><td>${yes(s.zernioApiKeyConfigured)}</td></tr>
 <tr><th>Database</th><td>${dbState}</td></tr>

@@ -3,8 +3,10 @@ import type { ShopConfig } from "./shop-config.js";
 
 /**
  * Per-conversation state, persisted as JSON (table bot_conversation_state, migration 003).
- * Kept small on purpose: no phone numbers, no message history, only what the next turn needs.
- * `vin` and the remembered part request are the only customer-supplied strings it holds.
+ * Kept small on purpose: no phone numbers, only what the next turn needs.
+ * Customer-supplied strings: `vin`, the remembered part request(s) and, ONLY for shops with the AI assistant on,
+ * a short `history` (last few messages, truncated) so the AI can read follow-ups like "والخلفية؟".
+ * It is dropped on every reset (session TTL / restart).
  */
 
 export const STEPS = [
@@ -16,6 +18,9 @@ export const STEPS = [
   "handoff", // staff took over: bot stays silent until the silence window ends
 ] as const;
 export type Step = (typeof STEPS)[number];
+
+export const HISTORY_MAX = 6;
+export const HISTORY_TEXT_MAX = 300;
 
 export const vehicleRefSchema = z.object({
   vehicleId: z.string(),
@@ -44,6 +49,10 @@ export const conversationStateSchema = z.object({
   candidates: z.array(vehicleRefSchema).default([]),
   /** The customer's part request (cleaned), remembered while we wait for the VIN or a variant choice. */
   pendingPart: z.string().nullable().default(null),
+  /** AI path, several parts in one message: every catalogue query (pendingPart is the first one). */
+  pendingParts: z.array(z.string()).max(5).default([]),
+  /** The last query that produced a confirmed quote ("بكم؟" / "متوفر؟" re-runs it for stock and price). */
+  lastQuery: z.string().nullable().default(null),
   clarification: z
     .object({ baseQuery: z.string(), question: z.string(), rounds: z.number().int() })
     .nullable()
@@ -67,6 +76,11 @@ export const conversationStateSchema = z.object({
   lastParts: z.array(z.string()).max(10).default([]),
   /** Provider message id of the last inbound message handled (lets the worker skip a replayed job). */
   lastMessageId: z.string().nullable().default(null),
+  /** AI shops only: last messages (customer + bot), truncated, for follow-up context. Cleared on reset. */
+  history: z
+    .array(z.object({ from: z.enum(["customer", "bot"]), text: z.string().max(400) }))
+    .max(HISTORY_MAX)
+    .default([]),
   updatedAt: z.string(),
 });
 export type ConversationState = z.infer<typeof conversationStateSchema>;

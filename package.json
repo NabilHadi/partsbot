@@ -19,7 +19,8 @@
     "chat": "tsx src/scripts/chat.ts",
     "templates": "tsx src/scripts/print-templates.ts > docs/bot-templates.md",
     "import-stock": "tsx src/scripts/import-stock.ts",
-    "shop": "tsx src/scripts/shop.ts"
+    "shop": "tsx src/scripts/shop.ts",
+    "eval-ai": "tsx src/scripts/eval-ai.ts"
   },
   "dependencies": {
     "@fastify/formbody": "^8.0.2",

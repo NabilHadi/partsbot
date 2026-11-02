@@ -24,10 +24,12 @@ Server-rendered pages served by the main Fastify process (`dist/main.js`). There
 | `POST /admin/shops/:id/settings` | Settings. Validated by the same zod schema (`shopConfigSchema`) as the CLI; errors are shown inline and an invalid config is never saved. An empty field means "use the default". |
 | `POST /admin/shops/:id/staff`, `.../staff/remove` | Staff add/remove. Phones are normalized to E.164 and shown as the last 4 digits only. |
 | `POST /admin/shops/:id/import` | CSV/XLSX/XLSM upload. Same importer as `npm run stock:import`. The file goes to a private temp dir and is deleted after the import; nothing is uploaded anywhere. |
-| `GET /admin/app` | Read-only: DRY_RUN, OneEPC URL + reachability, Zernio configured yes/no, DB, queue depth, version/commit |
+| `GET /admin/app` | Read-only: DRY_RUN, OneEPC URL + reachability, Zernio configured yes/no, DB, queue depth, version/commit, AI on/off + model + fallback + key check (the key itself is never shown) |
+| `GET /admin/synonyms`, `POST /admin/synonyms`, `POST /admin/synonyms/:id`, `.../:id/delete` | Synonym list (the deterministic layer; see docs/ai.md): add, edit, enable/disable, delete |
+| `POST /admin/synonym-suggestions/:id/approve`, `.../reject` | Pending suggestions from the AI. Approve (optionally editing the canonical words) adds them to the list; nothing is applied automatically |
 | `GET /admin/audit` | Last 200 admin actions (who, what, when in Asia/Riyadh) |
 
-The audit log (`admin_audit_log`, migration 005) records logins, failed logins, shop/settings/staff changes and imports. Staff phone numbers and passwords are never written to it.
+The audit log (`admin_audit_log`, migration 005) records logins, failed logins, shop/settings/staff changes, imports and synonym changes (`synonym.add/update/delete`, `synonym.suggestion.approve/reject`). Staff phone numbers and passwords are never written to it.
 
 ## Tests
 

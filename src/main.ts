@@ -8,6 +8,7 @@ import { createPgBossInboundQueue } from "./queue/inbound.js";
 import { QUEUES } from "./queues.js";
 import { buildServer, type ServerDeps } from "./server.js";
 import { createPgDedupeStore } from "./zernio/dedupe.js";
+import { createAiFromConfig } from "./ai/index.js";
 
 const config = loadConfig();
 const db = createPool(config.DATABASE_URL);
@@ -41,6 +42,8 @@ function gitCommit(): string {
 }
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
+const aiSetup = createAiFromConfig(config);
+
 if (!config.ADMIN_PASSWORD) console.warn("ADMIN_PASSWORD is not set: /admin answers 503");
 const app = buildServer({
   db,
@@ -52,6 +55,7 @@ const app = buildServer({
       const [real, mock] = await Promise.all([checkOneEpc(oneepc.real), oneepc.mock ? checkOneEpc(oneepc.mock) : Promise.resolve(null)]);
       return { real, mock };
     },
+    ...(aiSetup.enabled ? { aiCheck: () => aiSetup.provider.check() } : {}),
     status: {
       dryRun: config.DRY_RUN,
       oneepcBaseUrl: config.ONEEPC_BASE_URL,
@@ -62,6 +66,14 @@ const app = buildServer({
       version: pkg.version,
       commit: gitCommit(),
       queueName: QUEUES.inboundMessage,
+      ai: {
+        enabled: aiSetup.enabled,
+        reason: aiSetup.enabled ? null : aiSetup.reason,
+        provider: config.AI_PROVIDER,
+        model: config.AI_MODEL,
+        fallbackModel: config.AI_FALLBACK_MODEL,
+        keyConfigured: !!config.GEMINI_API_KEY,
+      },
     },
   },
 });

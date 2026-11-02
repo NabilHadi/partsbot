@@ -125,7 +125,7 @@ try {
       break;
     case "create": {
       if (!values.name?.trim()) fail("missing --name");
-      const config = values.test ? { testShop: true } : {};
+      const config = values.test ? { testShop: true, aiEnabled: true } : {}; // AI: on for test shops, off for real ones until switched on
       const r = await db.query<ShopRow>(
         "INSERT INTO shops (name, city, zernio_account_id, waba_id, plan, config) VALUES ($1, $2, $3, $4, COALESCE($5, 'starter'), $6) RETURNING *",
         [values.name.trim(), values.city ?? null, values["zernio-account"] ?? null, values.waba ?? null, values.plan ?? null, config],

@@ -32,6 +32,23 @@ const envSchema = z
     .string()
     .optional()
     .transform((v) => (v ?? "").trim().toLowerCase() === "true"),
+  /**
+   * AI layer (src/ai). Global switch, default OFF; each shop must also have config.aiEnabled. Only "true" turns it on.
+   * Without a key the AI stays off (the rule engine answers) and /admin/app says so.
+   */
+  AI_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? "").trim().toLowerCase() === "true"),
+  AI_PROVIDER: z.enum(["gemini"]).default("gemini"),
+  /** Model id as listed by the provider's models.list (checked at startup by /admin/app). */
+  AI_MODEL: z.string().min(1).default("gemini-3.8-flash"),
+  /** Optional model used for the single retry (e.g. when the main model is overloaded). Empty = retry the same model. */
+  AI_FALLBACK_MODEL: z.string().optional().transform((v) => (v && v.trim() ? v.trim() : null)),
+  /** Per model call; one retry. */
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(12000),
+  /** Never logged or shown; /admin/app only says configured yes/no. */
+  GEMINI_API_KEY: z.string().min(1).optional(),
   })
   .superRefine((env, ctx) => {
     if (env.ONEEPC_DECODE_SOURCE !== env.ONEEPC_SEARCH_SOURCE) {

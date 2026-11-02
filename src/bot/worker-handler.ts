@@ -11,6 +11,9 @@ import { handleInbound, type BotAction, type OneEpcLike } from "./engine.js";
 import { shopConfigSchema, localTime } from "./shop-config.js";
 import { STATE_RETENTION_DAYS, type BotStore } from "./store.js";
 import { createStockLookup, syntheticAllowed, type StockSource } from "../inventory/stock.js";
+import type { EngineAi } from "../ai/index.js";
+import { costUsd } from "../ai/provider.js";
+import type { SuggestionInput, SynonymIndex } from "../ai/synonyms.js";
 
 /** The slice of ZernioSender we use. */
 export interface ReplySender {
@@ -31,6 +34,12 @@ export interface WorkerHandlerDeps {
   stock?: StockSource;
   /** Env ALLOW_SYNTHETIC_STOCK=true: a test shop may see synthetic stock. Never applies to a real shop. */
   allowSyntheticStockEnv?: boolean;
+  /** Server-wide AI (AI_ENABLED + key). Used only for shops with `aiEnabled`. Absent = rules only. */
+  ai?: EngineAi;
+  /** The synonym list (cached). A load failure = no synonyms this turn + an alert. */
+  synonyms?: () => Promise<SynonymIndex>;
+  /** Store the AI's unknown mappings as pending suggestions (best effort). */
+  recordSuggestions?: (s: SuggestionInput[]) => Promise<void>;
   now?: () => Date;
   log?: (event: string, fields?: LogFields) => void;
 }
@@ -97,7 +106,19 @@ export async function processInboundJob(job: InboundMessageJob, deps: WorkerHand
     });
     const stock = deps.stock ? createStockLookup(deps.stock, shop.id, allowSynthetic) : undefined;
     const oneepc = deps.oneepcFor ? deps.oneepcFor({ testShop: shopConfig.testShop }) : deps.oneepc;
-    const result = await handleInbound(state, job.text, { oneepc, now, shop: shopConfig, botMessagesToday, stock, allowSyntheticStock: allowSynthetic });
+    let synonyms: SynonymIndex | undefined;
+    if (deps.synonyms) {
+      try {
+        synonyms = await deps.synonyms();
+      } catch (err) {
+        log("alert", { ...ids, severity: "warning", code: "synonyms_load_failed", detail: `error=${(err as Error)?.name ?? "unknown"}` });
+      }
+    }
+    const ai = deps.ai && shopConfig.aiEnabled ? deps.ai : undefined;
+    const result = await handleInbound(state, job.text, {
+      oneepc, now, shop: shopConfig, botMessagesToday, stock, allowSyntheticStock: allowSynthetic,
+      ...(ai ? { ai } : {}), ...(synonyms ? { synonyms } : {}),
+    });
     result.newState.lastMessageId = job.providerMessageId;
 
     logActions(log, ids, result.actions);
@@ -123,11 +144,19 @@ export async function processInboundJob(job: InboundMessageJob, deps: WorkerHand
     if (result.replies.length > 0 || state === null) {
       await deps.store.addUsage(shop.id, dayKey, { botMessages: result.replies.length, newConversations: state === null ? 1 : 0 });
     }
+    const suggestions = result.actions.flatMap((a) => (a.type === "synonym_suggestion" ? [{ term: a.term, canonicalAr: a.canonicalAr, canonicalEn: a.canonicalEn }] : []));
+    if (suggestions.length > 0 && deps.recordSuggestions) {
+      await deps.recordSuggestions(suggestions).catch((err: unknown) =>
+        log("alert", { ...ids, severity: "warning", code: "synonym_suggestion_failed", detail: `error=${(err as Error)?.name ?? "unknown"}` }),
+      );
+    }
     return result.replies.length > 0 ? "replied" : "silent";
   });
 }
 
 function logActions(log: NonNullable<WorkerHandlerDeps["log"]>, ids: LogFields, actions: BotAction[]): void {
+  const suggestions = actions.filter((a) => a.type === "synonym_suggestion").length;
+  if (suggestions > 0) log("synonym_suggestions", { ...ids, count: suggestions });
   for (const a of actions) {
     switch (a.type) {
       case "handoff":
@@ -146,6 +175,17 @@ function logActions(log: NonNullable<WorkerHandlerDeps["log"]>, ids: LogFields, 
       case "oneepc_call":
         log("oneepc_call", { ...ids, endpoint: a.endpoint, requestId: a.requestId, dataVersion: a.dataVersion, outcome: a.outcome });
         break;
+      case "ai_call":
+        // Metrics only: never the prompt, the customer's message or the reply.
+        log("ai_call", {
+          ...ids, stage: a.stage, ok: a.ok, reason: a.reason, model: a.model, latencyMs: a.latencyMs,
+          inputTokens: a.inputTokens, outputTokens: a.outputTokens,
+          costUsd: ((c) => (c === null ? null : Number(c.toFixed(6))))(costUsd(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens })),
+          intent: a.intent, parts: a.parts, validator: a.validator,
+        });
+        break;
+      case "synonym_suggestion":
+        break; // counted below; the words themselves go to the admin's review list, not to logs
     }
   }
 }

@@ -57,6 +57,32 @@ describe("/admin auth", () => {
     expect(p2.body).toContain("REJECTED by OneEPC");
   });
 
+  it("app page shows AI status and model, never the key", async () => {
+    const f = fakeDb();
+    const KEY = "AIzaSy-THIS-MUST-NEVER-SHOW";
+    const ai = { enabled: true, reason: null, provider: "gemini", model: "gemini-3.8-flash", fallbackModel: "gemini-2.5-flash", keyConfigured: true };
+    const a = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, ai }, aiCheck: async () => ({ ok: true, detail: "model available, key accepted" }) } });
+    const { page } = await loggedIn(a);
+    expect(page.body).toContain("<strong>ON</strong>");
+    expect(page.body).toContain("<strong>OK</strong>");
+    expect(page.body).toContain("gemini-3.8-flash");
+    expect(page.body).toContain("gemini-2.5-flash");
+    expect(page.body).not.toContain(KEY);
+    const b = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, ai: { ...ai, enabled: false, reason: "no_key", keyConfigured: false } } } });
+    const { page: p2 } = await loggedIn(b);
+    expect(p2.body).toContain("no API key is configured");
+  });
+
+  it("synonym changes need a session and a CSRF token", async () => {
+    const { a, queries } = app(PW);
+    const anonPost = await a.inject({ method: "POST", url: "/admin/synonyms", headers: { "content-type": "application/x-www-form-urlencoded" }, payload: "term=x&canonical_ar=y&canonical_en=z" });
+    expect([302, 303, 401, 403]).toContain(anonPost.statusCode);
+    const { cookie } = await loggedIn(a);
+    const noCsrf = await a.inject({ method: "POST", url: "/admin/synonym-suggestions/1/approve", headers: { cookie, "content-type": "application/x-www-form-urlencoded" }, payload: "" });
+    expect(noCsrf.statusCode).toBe(403);
+    expect(queries.some((q) => /synonym/i.test(q.text) && /INSERT|UPDATE|DELETE/i.test(q.text))).toBe(false);
+  });
+
   it("fails closed with 503 on every admin URL when ADMIN_PASSWORD is unset", async () => {
     const { a } = app(undefined);
     for (const url of ["/admin", "/admin/", "/admin/login", "/admin/shops", "/admin/app", "/admin/admin.css"]) {

@@ -190,3 +190,52 @@ describe("processInboundJob: synthetic stock policy", () => {
     expect(body).toContain("(بيانات تجريبية)");
   });
 });
+
+describe("processInboundJob: AI layer", () => {
+  const aiDeps = async () => {
+    const { engineAi } = await import("../ai/index.js");
+    const { scriptedProvider, understanding, draftOf } = await import("../ai/testkit.js");
+    const { SynonymIndex } = await import("../ai/synonyms.js");
+    const provider = scriptedProvider((req) =>
+      req.stage === "compose"
+        ? { reply: `هلا! ${draftOf(req)}` }
+        : understanding({ parts: [{ customer_words: "كرتون الدهن", normalized_en: "oil filter", normalized_ar: "فلتر زيت" }] }),
+    );
+    const recorded: unknown[] = [];
+    return {
+      provider,
+      recorded,
+      extra: {
+        ai: engineAi(provider),
+        synonyms: async () => new SynonymIndex([]),
+        recordSuggestions: async (s: unknown[]) => void recorded.push(...s),
+      },
+    };
+  };
+
+  it("the model is only called for shops with aiEnabled", async () => {
+    const off = await aiDeps();
+    const a = setup({ dryRun: true, shopConfig: {} });
+    await processInboundJob(job("a1", "ابي كرتون الدهن"), { ...a.deps, ...off.extra });
+    expect(off.provider.calls).toHaveLength(0);
+
+    const on = await aiDeps();
+    const b = setup({ dryRun: true, shopConfig: { aiEnabled: true } });
+    await processInboundJob(job("b1", "ابي كرتون الدهن"), { ...b.deps, ...on.extra });
+    expect(on.provider.calls.map((c) => c.stage)).toEqual(["understand", "compose"]);
+    expect(on.recorded).toEqual([expect.objectContaining({ term: "كرتون الدهن", canonicalAr: "فلتر زيت" })]);
+  });
+
+  it("ai_call logs carry model, tokens, latency, cost and outcome, never the prompt, message or reply", async () => {
+    const on = await aiDeps();
+    const { deps, logs } = setup({ dryRun: true, shopConfig: { aiEnabled: true } });
+    await processInboundJob(job("c1", "ابي كرتون الدهن"), { ...deps, ...on.extra });
+    const calls = logs.filter((l) => l.event === "ai_call");
+    expect(calls.map((l) => l.fields.stage)).toEqual(["understand", "compose"]);
+    expect(calls[0]!.fields).toMatchObject({ ok: true, model: "test-model", inputTokens: 100, outputTokens: 20, intent: "part_request", parts: 1 });
+    expect(calls[1]!.fields).toMatchObject({ ok: true, validator: "pass" });
+    expect(logs.some((l) => l.event === "synonym_suggestions")).toBe(true);
+    const all = JSON.stringify(logs);
+    for (const s of ["كرتون", "الدهن", "هلا", "فلتر"]) expect(all).not.toContain(s);
+  });
+});

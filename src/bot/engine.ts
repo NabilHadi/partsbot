@@ -21,16 +21,25 @@
  *     (`showAlternatives`) and prices (`priceQuotingEnabled`).
  *  7. Outside opening hours (`afterHoursMode`): one "closed now, staff follow up <when>" note per closed period,
  *     either added to the normal reply or sent alone (then no lookup at all).
+ *  8. AI (optional, `deps.ai`): it only UNDERSTANDS the message (intent, VIN text, part descriptions), may narrow
+ *     a list of confirmed results by index, and REPHRASES a reply code already decided. It never sees or produces
+ *     part numbers; the synonym list (`deps.synonyms`) beats it; any AI failure or invalid output = the rules /
+ *     the template. The parts block is code-rendered and the guard above still checks the final text.
  */
 import { OneEpcError } from "../oneepc/errors.js";
 import type { DecodeResponse, PartResult, SearchResponse, Vehicle, VehicleCandidate } from "../oneepc/types.js";
 import type { OneEpcResult, SearchPartsParams } from "../oneepc/client.js";
 import { PartNumberGuardError, assertOnlyAllowedPartNumbers } from "./guard.js";
-import { parseMessage, parseVariantChoice, type Lang, type ParsedMessage } from "./intent.js";
-import { T, render, staffFollowUp, whenText, type PartLine, type PartStockView, type StockFooter, type StockQtyView, type TemplateName } from "./arabic.js";
+import { extractVin, parseMessage, parseVariantChoice, type Lang, type ParsedMessage } from "./intent.js";
+import { findPartNumberLikeTokens } from "./guard.js";
+import { T, render, renderPartsBlock, staffFollowUp, whenText, type PartLine, type PartStockView, type StockFooter, type StockQtyView, type TemplateName } from "./arabic.js";
 import type { PartStock, StockEntry, StockLookup } from "../inventory/stock.js";
 import { closedPeriodKey, localTime, staffAvailability, type ShopConfig } from "./shop-config.js";
-import { isExpired, newState, resetState, vehicleDisplayName, type ConversationState, type VehicleRef } from "./state.js";
+import { HISTORY_MAX, HISTORY_TEXT_MAX, isExpired, newState, resetState, vehicleDisplayName, type ConversationState, type VehicleRef } from "./state.js";
+import type { EngineAi } from "../ai/index.js";
+import type { Understanding } from "../ai/understand.js";
+import { queryForAiPart, type PartQuery, type SynonymIndex } from "../ai/synonyms.js";
+import { PARTS_PLACEHOLDER } from "../ai/validate.js";
 
 /** Only the two OneEPC calls the bot needs; OneEpcClient satisfies this, so does a test fake. */
 export interface OneEpcLike {
@@ -48,6 +57,10 @@ export interface EngineDeps {
   stock?: StockLookup;
   /** Must be true for any synthetic stock to be shown (test shop that opted in). Default false. */
   allowSyntheticStock?: boolean;
+  /** AI assistant: present only when AI is on server-wide AND for this shop. Absent = rules + templates only. */
+  ai?: EngineAi;
+  /** The admin's synonym list (Gulf word -> canonical name). Applies with and without AI. */
+  synonyms?: SynonymIndex;
 }
 
 export type HandoffReason =
@@ -75,7 +88,24 @@ export type BotAction =
   /** Confirmed part numbers identified this turn (also when hidden from the customer), for logs and staff handoff. */
   | { type: "parts_identified"; partNumbers: string[]; shownToCustomer: boolean }
   /** One line per OneEPC call, for logs (request id + data version only). */
-  | { type: "oneepc_call"; endpoint: "decode" | "search"; requestId: string | null; dataVersion: string | null; outcome: string };
+  | { type: "oneepc_call"; endpoint: "decode" | "search"; requestId: string | null; dataVersion: string | null; outcome: string }
+  /** One line per AI call, for logs: never the prompt, the message or the reply. */
+  | {
+      type: "ai_call";
+      stage: "understand" | "select" | "compose";
+      ok: boolean;
+      /** Why the AI result was not used (provider error, schema_invalid, validator...), null when used. */
+      reason: string | null;
+      model: string;
+      latencyMs: number;
+      inputTokens: number;
+      outputTokens: number;
+      intent?: string;
+      parts?: number;
+      validator?: string | null;
+    }
+  /** The AI mapped customer words the synonym list does not know: stored as a PENDING suggestion for the admin. */
+  | { type: "synonym_suggestion"; term: string; canonicalAr: string; canonicalEn: string };
 
 export interface EngineResult {
   newState: ConversationState;
@@ -202,7 +232,16 @@ async function stockForQuote(t: Turn, partNumbers: string[]): Promise<{ views: M
 
 class Turn {
   readonly segments: string[] = [];
+  /** Template name of each segment (same order), so the AI only rephrases replies made of safe templates. */
+  kinds: string[] = [];
+  /** The code-rendered parts block inside the partsQuoted segment (kept verbatim when the AI rephrases). */
+  partsBlock: string | null = null;
   readonly actions: BotAction[] = [];
+  /** AI for this turn (cleared after a provider failure so we do not wait on it twice). */
+  ai: EngineAi | undefined;
+  /** Catalogue queries from the AI understanding (several parts in one message). */
+  aiQueries: PartQuery[] = [];
+  customerText = "";
   /** Part numbers we are allowed to say this turn: exact strings from OneEPC, confirmed + unambiguous only. */
   readonly quotable = new Set<string>();
   /** Set when the turn must not change `updatedAt` / `turns` (silent handoff). */
@@ -215,10 +254,12 @@ class Turn {
     lang: Lang,
   ) {
     this.lang = lang;
+    this.ai = deps.ai;
   }
 
   say<K extends TemplateName>(name: K, ...p: Parameters<typeof render<K>> extends [Lang, K, ...infer R] ? R : never): void {
     this.segments.push((render as (l: Lang, n: K, ...r: unknown[]) => string)(this.lang, name, ...p));
+    this.kinds.push(name);
   }
 
   followUp(): string {
@@ -320,10 +361,19 @@ async function processVin(t: Turn, vin: string): Promise<"vehicle_ready" | "stop
 
 // ------------------------------------------------------------------ search
 
-async function runSearch(t: Turn, query: string, clarifyRounds: number, previousQuestion: string | null): Promise<void> {
+type SearchOutcome =
+  | { kind: "confirmed"; query: string; results: PartResult[]; confirmed: PartResult[] }
+  | { kind: "ambiguous"; query: string; question: string | null }
+  | { kind: "unconfirmed"; query: string }
+  | { kind: "none"; query: string }
+  /** OneEPC failed: the turn already holds the handoff reply (failOneEpc). */
+  | { kind: "failed"; query: string };
+
+/** One catalogue search, no conversation-state decisions (except refreshing an expired vehicle id). */
+async function searchOnce(t: Turn, query: string): Promise<SearchOutcome> {
   const { s, deps } = t;
   const vehicle = s.vehicle;
-  if (!vehicle) return;
+  if (!vehicle) return { kind: "failed", query };
 
   let res: OneEpcResult<SearchResponse>;
   try {
@@ -342,65 +392,154 @@ async function runSearch(t: Turn, query: string, clarifyRounds: number, previous
     }
   } catch (err) {
     failOneEpc(t, err, "search");
-    return;
+    return { kind: "failed", query };
   }
   const { data } = res;
   const results = data.results.filter((r) => r.score >= MIN_QUOTE_SCORE);
   t.actions.push({ type: "oneepc_call", endpoint: "search", requestId: res.requestId, dataVersion: res.dataVersion, outcome: `results=${data.results.length} ambiguous=${data.ambiguity.is_ambiguous}` });
-
-  // 1. Ambiguous search: ask the API's own question (never quote anything from an ambiguous response).
-  if (data.ambiguity.is_ambiguous) {
-    const question = pickQuestion(data.ambiguity.question_hint, t.lang);
-    const repeated = question !== null && question === previousQuestion; // the answer did not resolve it: stop looping
-    if (question && !repeated && clarifyRounds < MAX_CLARIFY_ROUNDS) {
-      s.clarification = { baseQuery: query, question, rounds: clarifyRounds + 1 };
-      s.step = "awaiting_clarification";
-      s.pendingPart = null;
-      t.say("clarification", { question });
-      return;
-    }
-    t.handoff("clarification_failed", "needStaffConfirm");
-    return;
-  }
-
-  // 2. Quote confirmed results only.
+  if (data.ambiguity.is_ambiguous) return { kind: "ambiguous", query, question: pickQuestion(data.ambiguity.question_hint, t.lang) };
   const confirmed = results.filter((r) => r.fitment.status === "confirmed");
-  if (confirmed.length > 0) {
-    const shown = confirmed.slice(0, deps.shop.maxPartsPerReply);
-    const { views, footer } = await stockForQuote(t, shown.map((r) => r.part_number));
-    const showNumbers = deps.shop.showPartNumbers;
-    const items: PartLine[] = shown.map((r) => {
-      const stock = views.get(r.part_number);
-      return { name: partName(r, t.lang), partNumber: showNumbers ? r.part_number : null, ...(stock ? { stock } : {}) };
-    });
-    // Hidden numbers are never quotable: if one slipped into the text the guard would block the reply.
-    if (showNumbers) shown.forEach((r) => t.quotable.add(r.part_number));
-    s.lastParts = shown.map((r) => r.part_number);
-    t.actions.push({ type: "parts_identified", partNumbers: s.lastParts, shownToCustomer: showNumbers });
-    s.step = "awaiting_part";
-    s.pendingPart = null;
-    s.clarification = null;
-    s.counters.failedSearches = 0;
-    t.say("partsQuoted", { items, staffNote: results.length > confirmed.length, askAck: !vehicle.acknowledged, stock: footer });
-    return;
-  }
+  if (confirmed.length > 0) return { kind: "confirmed", query, results, confirmed };
+  if (results.length > 0) return { kind: "unconfirmed", query };
+  return { kind: "none", query };
+}
 
-  // 3. Results exist but none is confirmed to fit.
-  if (results.length > 0) {
-    t.handoff("fitment_unconfirmed", "needStaffConfirm");
-    return;
-  }
+/** Quote confirmed results (one partsQuoted segment) and remember them. */
+async function quote(t: Turn, shown: PartResult[], staffNote: boolean, query: string): Promise<void> {
+  const { s, deps } = t;
+  const { views, footer } = await stockForQuote(t, shown.map((r) => r.part_number));
+  const showNumbers = deps.shop.showPartNumbers;
+  const items: PartLine[] = shown.map((r) => {
+    const stock = views.get(r.part_number);
+    return { name: partName(r, t.lang), partNumber: showNumbers ? r.part_number : null, ...(stock ? { stock } : {}) };
+  });
+  // Hidden numbers are never quotable: if one slipped into the text the guard would block the reply.
+  if (showNumbers) shown.forEach((r) => t.quotable.add(r.part_number));
+  s.lastParts = shown.map((r) => r.part_number);
+  s.lastQuery = query;
+  t.actions.push({ type: "parts_identified", partNumbers: s.lastParts, shownToCustomer: showNumbers });
+  s.step = "awaiting_part";
+  s.pendingPart = null;
+  s.pendingParts = [];
+  s.clarification = null;
+  s.counters.failedSearches = 0;
+  const params = { items, staffNote, askAck: !(s.vehicle?.acknowledged ?? true), stock: footer };
+  t.partsBlock = renderPartsBlock(t.lang, params);
+  t.say("partsQuoted", params);
+}
 
-  // 4. Nothing found.
+function nothingFound(t: Turn): void {
+  const { s } = t;
   s.counters.failedSearches++;
   s.pendingPart = null;
+  s.pendingParts = [];
   s.clarification = null;
-  if (s.counters.failedSearches >= MAX_FAILED_SEARCHES) {
-    t.handoff("no_results", "handoffNoResults");
-    return;
-  }
+  if (s.counters.failedSearches >= MAX_FAILED_SEARCHES) return t.handoff("no_results", "handoffNoResults");
   s.step = "awaiting_part";
   t.say("noResults");
+}
+
+function askClarification(t: Turn, baseQuery: string, question: string, rounds: number): void {
+  const { s } = t;
+  s.clarification = { baseQuery, question, rounds };
+  s.step = "awaiting_clarification";
+  s.pendingPart = null;
+  s.pendingParts = [];
+  t.say("clarification", { question });
+}
+
+/** AI (optional): narrow several confirmed results to what was asked, by index only. */
+async function aiSelect(t: Turn, query: string, confirmed: PartResult[]): Promise<{ keep: PartResult[] } | { question: string } | null> {
+  const ai = t.ai;
+  if (!ai || confirmed.length < 2 || !t.customerText) return null;
+  const r = await ai.select({
+    lang: t.lang,
+    customerText: t.customerText,
+    query,
+    candidates: confirmed.map((c, index) => ({ index, nameAr: c.name.ar, nameEn: c.name.en, category: c.category.ar ?? c.category.en ?? null })),
+  });
+  t.actions.push({ type: "ai_call", stage: "select", ok: r.ok, reason: r.ok ? null : r.reason, model: r.model, latencyMs: r.latencyMs, inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens });
+  if (!r.ok) return null;
+  if (r.keep.length > 0) return { keep: [...r.keep].sort((a, b) => a - b).map((i) => confirmed[i]!) };
+  return r.question ? { question: r.question } : null;
+}
+
+async function runSearch(t: Turn, query: string, clarifyRounds: number, previousQuestion: string | null): Promise<void> {
+  const { s, deps } = t;
+  if (!s.vehicle) return;
+  const o = await searchOnce(t, query);
+  switch (o.kind) {
+    case "failed":
+      return;
+    // 1. Ambiguous search: ask the API's own question (never quote anything from an ambiguous response).
+    case "ambiguous": {
+      const repeated = o.question !== null && o.question === previousQuestion; // the answer did not resolve it: stop looping
+      if (o.question && !repeated && clarifyRounds < MAX_CLARIFY_ROUNDS) return askClarification(t, query, o.question, clarifyRounds + 1);
+      return t.handoff("clarification_failed", "needStaffConfirm");
+    }
+    // 2. Quote confirmed results only (the AI may narrow them by index or ask one question).
+    case "confirmed": {
+      let pick = o.confirmed;
+      const sel = await aiSelect(t, query, o.confirmed);
+      if (sel && "keep" in sel) pick = sel.keep;
+      else if (sel && "question" in sel && clarifyRounds < MAX_CLARIFY_ROUNDS) return askClarification(t, query, sel.question, clarifyRounds + 1);
+      return quote(t, pick.slice(0, deps.shop.maxPartsPerReply), o.results.length > o.confirmed.length, query);
+    }
+    // 3. Results exist but none is confirmed to fit.
+    case "unconfirmed":
+      return t.handoff("fitment_unconfirmed", "needStaffConfirm");
+    // 4. Nothing found.
+    case "none":
+      return nothingFound(t);
+  }
+}
+
+/** Display name for a query we could not resolve: never a part-number-like string. */
+function queryLabel(q: string, lang: Lang): string {
+  return findPartNumberLikeTokens(q).length > 0 ? (lang === "ar" ? "القطعة اللي كتبت رقمها" : "the part number you sent") : q;
+}
+
+/**
+ * AI path, several parts in one message: one search each, ONE reply. Confirmed ones are quoted together;
+ * the first ambiguous one gets the API's question; the rest are named with "please confirm with staff".
+ */
+async function runMulti(t: Turn, queries: string[]): Promise<void> {
+  const { s, deps } = t;
+  if (!s.vehicle) return;
+  const outcomes: SearchOutcome[] = [];
+  for (const q of queries) {
+    const o = await searchOnce(t, q);
+    if (o.kind === "failed") return;
+    outcomes.push(o);
+  }
+  const confirmed = outcomes.filter((o): o is Extract<SearchOutcome, { kind: "confirmed" }> => o.kind === "confirmed");
+  const ask = outcomes.find((o): o is Extract<SearchOutcome, { kind: "ambiguous" }> => o.kind === "ambiguous" && o.question !== null);
+  if (confirmed.length === 0 && !ask) {
+    if (outcomes.some((o) => o.kind === "unconfirmed" || o.kind === "ambiguous")) return t.handoff("fitment_unconfirmed", "needStaffConfirm");
+    return nothingFound(t);
+  }
+  if (confirmed.length > 0) {
+    const shown = confirmed.flatMap((o) => o.confirmed).slice(0, deps.shop.maxPartsPerReply);
+    await quote(t, shown, confirmed.some((o) => o.results.length > o.confirmed.length), confirmed[0]!.query);
+  }
+  const unresolved = outcomes.filter((o) => o.kind !== "confirmed" && o !== ask).map((o) => queryLabel(o.query, t.lang));
+  if (unresolved.length > 0) t.say("partsUnresolved", { names: unresolved });
+  if (ask) askClarification(t, ask.query, ask.question!, 1);
+}
+
+/** Search what the customer asked for: several AI queries at once, or the single pending request. */
+async function searchPending(t: Turn): Promise<void> {
+  const { s } = t;
+  if (!s.pendingPart) return;
+  if (s.pendingParts.length > 1 && s.pendingParts[0] === s.pendingPart) return runMulti(t, s.pendingParts);
+  return runSearch(t, s.pendingPart, 0, null);
+}
+
+/** Remember the request (and, AI path, every part of it). */
+function setPending(t: Turn, request: string): void {
+  t.s.pendingPart = request;
+  const qs = t.aiQueries.map((q) => q.query);
+  t.s.pendingParts = qs.length > 1 && qs[0] === request ? qs.slice(0, 5) : [];
 }
 
 // ------------------------------------------------------------------ turn logic
@@ -409,7 +548,7 @@ async function afterVehicleKnown(t: Turn, fresh: boolean): Promise<void> {
   const { s } = t;
   if (s.pendingPart) {
     if (fresh && s.vehicle) t.say("vehicleLine", { vehicle: vehicleDisplayName(s.vehicle, t.lang) });
-    await runSearch(t, s.pendingPart, 0, null);
+    await searchPending(t);
   } else if (s.vehicle) {
     s.step = "awaiting_part";
     if (fresh) t.say("vehicleConfirmAskPart", { vehicle: vehicleDisplayName(s.vehicle, t.lang) });
@@ -442,14 +581,14 @@ async function handleDefault(t: Turn, p: ParsedMessage, first: boolean): Promise
 
   if (p.vinProblem && !p.vin) {
     s.counters.invalidVin++;
-    if (p.partsVocab && p.partRequest) s.pendingPart = p.partRequest;
+    if (p.partsVocab && p.partRequest) setPending(t, p.partRequest);
     if (s.counters.invalidVin >= MAX_INVALID_VIN) return t.handoff("invalid_vin_repeated", "handoffGeneric");
     s.step = "awaiting_vin";
     return t.say("invalidVin", { problem: p.vinProblem });
   }
 
   // "هذا الشاصي <VIN>" must not replace the part the customer already asked for.
-  if (p.partRequest && !(p.vin && s.pendingPart && !p.partsVocab)) s.pendingPart = p.partRequest;
+  if (p.partRequest && !(p.vin && s.pendingPart && !p.partsVocab)) setPending(t, p.partRequest);
 
   let fresh = false;
   if (p.vin && !(s.vehicle && s.vin === p.vin)) {
@@ -479,13 +618,15 @@ async function handleVariant(t: Turn, p: ParsedMessage, text: string): Promise<v
     s.counters.variantReprompts = 0;
     s.step = "awaiting_part";
     t.say("vehicleLine", { vehicle: vehicleDisplayName(s.vehicle, t.lang) });
-    if (s.pendingPart) return runSearch(t, s.pendingPart, 0, null);
+    if (s.pendingPart) return searchPending(t);
     // vehicleLine + askPart share one message.
     t.segments.pop();
+    t.kinds.pop();
     t.segments.push(`🚗 ${vehicleDisplayName(s.vehicle, t.lang)}\n${render(t.lang, "askPart")}`);
+    t.kinds.push("vehicleLineAskPart");
     return;
   }
-  if (p.partsVocab && p.partRequest) s.pendingPart = p.partRequest;
+  if (p.partsVocab && p.partRequest) setPending(t, p.partRequest);
   s.counters.variantReprompts++;
   if (s.counters.variantReprompts > MAX_VARIANT_REPROMPTS) return t.handoff("variant_unclear", "handoffGeneric");
   t.say("variantReask", { options: s.candidates.map((c) => candidateLabel(c, t.lang)) });
@@ -503,7 +644,10 @@ async function handleClarification(t: Turn, p: ParsedMessage): Promise<void> {
     s.clarification = { ...c, rounds: c.rounds + 1 };
     return t.say("clarification", { question: c.question });
   }
-  if (isNewRequest) return runSearch(t, answer, 0, null);
+  if (isNewRequest) {
+    setPending(t, answer);
+    return searchPending(t);
+  }
   return runSearch(t, `${c.baseQuery} ${answer}`.trim(), c.rounds, c.question);
 }
 
@@ -516,23 +660,171 @@ export async function handleInbound(state: ConversationState | null, inboundText
   const today = localTime(now, deps.shop.businessHours.timezone).dateKey;
 
   const text = (inboundText ?? "").trim();
-  const parsed: ParsedMessage | null = text
+  let parsed: ParsedMessage | null = text
     ? parseMessage(text, { modelHints: s.vehicle ? [s.vehicle.modelAr, s.vehicle.modelEn].filter((x): x is string => !!x) : [] })
     : null;
+  // The synonym list (deterministic, admin-owned) runs on the rule parser's request too.
+  if (parsed?.partRequest && deps.synonyms) {
+    const rw = deps.synonyms.rewrite(parsed.partRequest);
+    if (rw.hits.length > 0) parsed = { ...parsed, partRequest: rw.text, partsVocab: true };
+  }
   const lang: Lang = deps.shop.language === "auto" ? (parsed?.lang ?? s.lang) : deps.shop.language;
   s.lang = lang;
   const t = new Turn(s, deps, lang);
+  t.customerText = text;
+  if (!aiWorthCalling(t, parsed, text)) t.ai = undefined;
   const first = s.turns === 0;
+
+  if (t.ai && parsed && !rulesAreEnough(s, parsed, text)) {
+    const u = await t.ai.understand({
+      text,
+      history: s.history,
+      vehicle: s.vehicle ? vehicleDisplayName(s.vehicle, "en") : null,
+      language: deps.shop.language,
+      waitingFor: waitingFor(s),
+      lastPart: s.lastQuery ?? s.pendingPart,
+    });
+    t.actions.push({
+      type: "ai_call", stage: "understand", ok: u.ok, reason: u.ok ? null : u.reason, model: u.model, latencyMs: u.latencyMs,
+      inputTokens: u.usage.inputTokens, outputTokens: u.usage.outputTokens,
+      ...(u.ok ? { intent: u.data.intent, parts: u.data.parts.length } : {}),
+    });
+    if (u.ok) {
+      parsed = mergeUnderstanding(t, parsed, u.data);
+    } else if (u.reason !== "schema_invalid" && u.reason !== "invented_part_number") {
+      t.ai = undefined; // provider trouble (timeout, overload, auth...): rules + templates for the rest of this turn
+    }
+  }
 
   try {
     await decide(t, parsed, text, first, today);
+    if (t.ai) await composeTurn(t);
   } catch (err) {
     t.segments.length = 0;
+    t.kinds = [];
     t.quotable.clear();
     t.silent = false;
     failOneEpc(t, err, "search");
   }
-  return finalize(t, now);
+  const result = finalize(t, now);
+  rememberHistory(result, deps, text);
+  return result;
+}
+
+// ------------------------------------------------------------------ AI glue
+
+/** Do not spend an AI call when the bot will stay silent / send a fixed note, or the rules are certain. */
+function aiWorthCalling(t: Turn, p: ParsedMessage | null, text: string): boolean {
+  const { s, deps } = t;
+  if (!t.ai || !p || !text) return false;
+  if (s.step === "handoff") return false;
+  if (deps.botMessagesToday >= deps.shop.maxBotMessagesPerDay) return false;
+  if (closedPeriodKey(deps.now(), deps.shop.businessHours) && deps.shop.afterHoursMode === "note_only") return false;
+  if (p.wantsRestart) return false;
+  return true;
+}
+
+/** True when the rules alone are certain (VIN-only message, a bare yes/no, a variant number): skip "understand". */
+function rulesAreEnough(s: ConversationState, p: ParsedMessage, text: string): boolean {
+  if (p.vin && extractVin(text).rest.replace(/[^\p{L}\p{N}]/gu, "").length < 3) return true;
+  if ((p.isYes || p.isNo) && !p.partRequest && text.length <= 15) return true;
+  if (s.step === "awaiting_variant" && parseVariantChoice(text, s.candidates) !== null) return true;
+  return false;
+}
+
+function waitingFor(s: ConversationState): string | null {
+  switch (s.step) {
+    case "awaiting_vin":
+      return s.pendingPart ? `the VIN (chassis number), to search: ${s.pendingPart}` : "the VIN (chassis number) and the part";
+    case "awaiting_variant":
+      return "the customer to pick one numbered vehicle option";
+    case "awaiting_part":
+      return "the name of the part the customer needs";
+    case "awaiting_clarification":
+      return s.clarification ? `an answer to the catalogue question "${s.clarification.question}" about: ${s.clarification.baseQuery}` : null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * AI understanding -> the ParsedMessage the existing engine already handles. The rules keep the last word on
+ * what they are certain about (VIN regex, yes/no, restart); the synonym list beats the model's part names.
+ */
+function mergeUnderstanding(t: Turn, rule: ParsedMessage, u: Understanding): ParsedMessage {
+  const { s, deps } = t;
+  const aiVin = !rule.vin && u.vin_or_frame ? extractVin(u.vin_or_frame).vin : null; // code validates the VIN
+  const vin = rule.vin ?? aiVin;
+  const queries = u.parts.map((part) => queryForAiPart(part, deps.synonyms ?? null));
+  for (const q of queries) {
+    if (q.suggestion) t.actions.push({ type: "synonym_suggestion", ...q.suggestion });
+  }
+  t.aiQueries = queries;
+  let partRequest: string | null = queries[0]?.query ?? null;
+  let partsVocab = queries.length > 0;
+  // "بكم؟" / "متوفر؟" with no part named: the last quoted part again (stock and price come from the quote).
+  if (!partRequest && (u.intent === "price" || u.intent === "stock") && s.lastQuery && s.vehicle) partRequest = s.lastQuery;
+  if (s.step === "awaiting_clarification" || s.step === "awaiting_variant") {
+    // Short answers to our own question ("17 انش", "الثاني"): the rules' text, unless a new part is clearly named.
+    partsVocab = rule.partsVocab || queries.some((q) => q.source === "table");
+    if (!partsVocab) partRequest = rule.partRequest ?? partRequest;
+  }
+  const noPart = queries.length === 0;
+  return {
+    ...rule,
+    vin,
+    vinProblem: vin ? null : rule.vinProblem,
+    partRequest,
+    partsVocab,
+    isGreeting: rule.isGreeting || u.intent === "greeting",
+    isThanks: u.intent === "thanks" && noPart && !vin,
+    wantsStaff: rule.wantsStaff || u.intent === "human",
+    offTopic: u.intent === "off_topic" && noPart && !vin,
+  };
+}
+
+/** Segments the AI may rephrase: plain templates without API text, options lists or handoff wording. */
+const COMPOSE_KINDS = new Set<string>([
+  "welcomeAskVin", "welcomeAskVinWithRequest", "askVin", "askVinWithRequest", "invalidVin", "vehicleConfirmAskPart",
+  "vehicleLine", "vehicleLineAskPart", "askPart", "partsQuoted", "partsUnresolved", "noResults", "offTopic", "vehicleRejected",
+]);
+
+/** AI (optional): rephrase the decided reply in natural Gulf Arabic / English. Template on any problem. */
+async function composeTurn(t: Turn): Promise<void> {
+  const ai = t.ai;
+  if (!ai || t.silent || t.segments.length === 0) return;
+  if (t.actions.some((a) => a.type === "handoff")) return;
+  if (!t.kinds.every((k) => COMPOSE_KINDS.has(k))) return;
+  let draft = t.segments.join("\n\n");
+  if (t.partsBlock) {
+    if (draft.split(t.partsBlock).length !== 2) return;
+    draft = draft.split(t.partsBlock).join(PARTS_PLACEHOLDER);
+  }
+  const r = await ai.compose({ lang: t.lang, shopName: t.deps.shop.shopName, customerText: t.customerText, draft });
+  t.actions.push({
+    type: "ai_call", stage: "compose", ok: r.ok, reason: r.ok ? null : r.reason, model: r.model, latencyMs: r.latencyMs,
+    inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens, validator: r.ok ? "pass" : r.validator,
+  });
+  if (!r.ok) return;
+  const final = t.partsBlock ? r.text.split(PARTS_PLACEHOLDER).join(t.partsBlock) : r.text;
+  t.segments.length = 0;
+  t.segments.push(final);
+  t.kinds = ["composed"];
+}
+
+/** AI shops keep a short, truncated history for follow-ups; other shops keep none. */
+function rememberHistory(result: EngineResult, deps: EngineDeps, text: string): void {
+  const st = result.newState;
+  if (!deps.ai) {
+    st.history = [];
+    return;
+  }
+  if (st.turns === 0 && st.step === "idle" && !text) return;
+  const cut = (x: string) => (x.length > HISTORY_TEXT_MAX ? `${x.slice(0, HISTORY_TEXT_MAX - 1)}…` : x);
+  const add: ConversationState["history"] = [];
+  if (text) add.push({ from: "customer", text: cut(text) });
+  for (const r of result.replies) add.push({ from: "bot", text: cut(r) });
+  st.history = [...st.history, ...add].slice(-HISTORY_MAX);
 }
 
 async function decide(t: Turn, p: ParsedMessage | null, text: string, first: boolean, today: string): Promise<void> {

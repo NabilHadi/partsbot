@@ -21,6 +21,7 @@ export const SETTINGS_FIELDS: FieldDef[] = [
   { key: "stockDisplay", kind: "enum", options: STOCK_DISPLAY, label: "Stock display", hint: "hidden / availability (in stock or not) / quantity (exact count).", group: "Customer-facing replies" },
   { key: "showAlternatives", kind: "bool", label: "Show alternative parts", hint: "Variants of the same base number (CH, J, DENSO...).", group: "Customer-facing replies" },
   { key: "priceQuotingEnabled", kind: "bool", label: "Show prices", hint: "Show the shop's price next to stock lines.", group: "Customer-facing replies" },
+  { key: "aiEnabled", kind: "bool", label: "AI assistant", hint: "AI understands messages and words replies. Part numbers still come only from OneEPC; needs AI_ENABLED on the server.", group: "Customer-facing replies" },
   { key: "language", kind: "enum", options: ["ar", "en", "auto"], label: "Reply language", hint: "auto = the script of the customer's last message.", group: "Customer-facing replies" },
   { key: "shopName", kind: "text", label: "Shop name in the welcome line", hint: "Empty = omitted.", group: "Customer-facing replies" },
   { key: "afterHoursMode", kind: "enum", options: AFTER_HOURS_MODES, label: "After hours", hint: "reply_with_note = answer + one 'closed now' note; note_only = only the note.", group: "Hours and handoff" },

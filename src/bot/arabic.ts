@@ -187,6 +187,18 @@ function stockFooter(f: StockFooter | null, lang: Lang): string[] {
   return out;
 }
 
+/**
+ * The facts part of a quote (items, stock lines, "not confirmed" note, stock footer). Rendered ONLY by code;
+ * when the AI writes the surrounding reply it sees this as "[[PARTS]]" and code puts the exact text back.
+ */
+export function renderPartsBlock(lang: Lang, p: { items: PartLine[]; staffNote: boolean; stock?: StockFooter | null }): string {
+  return [
+    ...p.items.flatMap((i) => [i.partNumber ? `• ${i.name}: ${i.partNumber}` : `• ${i.name}`, ...stockLines(i, lang)]),
+    ...(p.staffNote ? [lang === "ar" ? `وفيه نتائج ثانية ما تأكد تطابقها، ${CONFIRM_WITH_STAFF_AR}.` : `Other results are not confirmed to fit. ${CONFIRM_WITH_STAFF_EN}.`] : []),
+    ...stockFooter(p.stock ?? null, lang),
+  ].join("\n");
+}
+
 export const T = {
   /** First reply to a new customer with no request yet: say who we are (automated), what we need (VIN) and what we do. */
   welcomeAskVin: {
@@ -272,17 +284,13 @@ export const T = {
     ar: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean; stock?: StockFooter | null }) =>
       [
         partsHeader(p.items, "ar"),
-        ...p.items.flatMap((i) => [i.partNumber ? `• ${i.name}: ${i.partNumber}` : `• ${i.name}`, ...stockLines(i, "ar")]),
-        ...(p.staffNote ? [`وفيه نتائج ثانية ما تأكد تطابقها، ${CONFIRM_WITH_STAFF_AR}.`] : []),
-        ...stockFooter(p.stock ?? null, "ar"),
+        renderPartsBlock("ar", p),
         ...(p.askAck ? ["وإذا السيارة مو صحيحة رد بـ لا. وتبي قطعة ثانية؟ اكتبها لي."] : ["تبي قطعة ثانية؟ اكتبها لي."]),
       ].join("\n"),
     en: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean; stock?: StockFooter | null }) =>
       [
         partsHeader(p.items, "en"),
-        ...p.items.flatMap((i) => [i.partNumber ? `• ${i.name}: ${i.partNumber}` : `• ${i.name}`, ...stockLines(i, "en")]),
-        ...(p.staffNote ? [`Other results are not confirmed to fit. ${CONFIRM_WITH_STAFF_EN}.`] : []),
-        ...stockFooter(p.stock ?? null, "en"),
+        renderPartsBlock("en", p),
         ...(p.askAck ? ["If this isn't your car, reply no. Need another part? Just write it."] : ["Need another part? Just write it."]),
       ].join("\n"),
   },
@@ -303,6 +311,15 @@ export const T = {
   noResults: {
     ar: () => "ما لقيت نتيجة بهالوصف 🙏 جرب تكتب اسم القطعة بشكل ثاني أو أوضح.",
     en: () => "I found nothing for that description 🙏 Try naming the part differently or more specifically.",
+  },
+
+  /**
+   * Several parts asked in one message (AI path): the ones the catalogue could not confirm, by canonical name.
+   * `names` are synonym-list / normalized names, never customer text with numbers.
+   */
+  partsUnresolved: {
+    ar: (p: { names: string[] }) => `وما قدرت أأكد من الكتالوج: ${p.names.join("، ")}. ${CONFIRM_WITH_STAFF_AR}، أو اكتب لي وصف أوضح.`,
+    en: (p: { names: string[] }) => `I couldn't confirm these from the catalogue: ${p.names.join(", ")}. ${CONFIRM_WITH_STAFF_EN}, or describe them more clearly.`,
   },
 
   // ---- handoffs: each one tells the customer staff will follow up, nothing else ----

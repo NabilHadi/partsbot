@@ -166,6 +166,8 @@ export const shopConfigSchema = z.strictObject({
   handoffSilenceMinutes: z.number().int().min(5).max(7 * 24 * 60).default(720),
   /** At most this many parts are listed in one reply. */
   maxPartsPerReply: z.number().int().min(1).max(10).default(3),
+  /** AI understanding + reply wording (src/ai). Needs the global AI_ENABLED too. Off for new shops. */
+  aiEnabled: z.boolean().default(false),
 });
 export type ShopConfig = z.infer<typeof shopConfigSchema>;
 

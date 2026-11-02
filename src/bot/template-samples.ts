@@ -16,6 +16,7 @@ export function sampleParams(lang: Lang): Record<string, unknown> {
     askAck: true,
     problem: "bad_length",
     when: whenText(lang, { dayOffset: 1, weekday: "sat", time: "09:00" }),
+    names: ar ? ["فحمات فرامل خلفية", "بواجي"] : ["rear brake pads", "spark plugs"],
   };
 }
 

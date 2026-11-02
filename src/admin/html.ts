@@ -50,7 +50,7 @@ export interface LayoutOpts {
 
 export function layout(opts: LayoutOpts, body: Raw): string {
   const nav = opts.nav
-    ? html`<nav><a href="/admin/shops">Shops</a><a href="/admin/app">App status</a><a href="/admin/audit">Audit log</a>
+    ? html`<nav><a href="/admin/shops">Shops</a><a href="/admin/synonyms">Synonyms</a><a href="/admin/app">App status</a><a href="/admin/audit">Audit log</a>
 <form method="post" action="/admin/logout" class="inline"><input type="hidden" name="_csrf" value="${opts.csrf}"><button class="link">Log out</button></form></nav>`
     : "";
   const flash = opts.flash ? html`<p class="flash ${opts.flash.kind}">${opts.flash.text}</p>` : "";

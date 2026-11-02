@@ -20,7 +20,7 @@ export class Conversation {
   readonly turns: Turn[] = [];
   readonly allActions: BotAction[] = [];
   /** Optional engine extras (stock lookup and its synthetic policy) for tests and the REPL. */
-  extras: Pick<EngineDeps, "stock" | "allowSyntheticStock"> = {};
+  extras: Pick<EngineDeps, "stock" | "allowSyntheticStock" | "ai" | "synonyms"> = {};
   /** Part numbers the OneEPC fake/mock returned, collected by wrappers (optional, for the "no invented numbers" check). */
   constructor(
     private readonly oneepc: OneEpcLike,
