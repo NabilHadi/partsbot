@@ -1,0 +1,24 @@
+{
+  "id": "C8",
+  "title": "GET /vehicles/decode?vin=<BMW VIN>",
+  "expected": "422 unsupported_brand",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/decode?vin=<VIN_BMW>"
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "error": {
+        "code": "unsupported_brand",
+        "message": "This brand is not supported.",
+        "request_id": "<REQUEST_ID>"
+      }
+    }
+  }
+}

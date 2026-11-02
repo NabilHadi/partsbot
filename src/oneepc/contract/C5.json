@@ -1,0 +1,59 @@
+{
+  "id": "C5",
+  "title": "GET /vehicles/decode?vin=<ambiguous>",
+  "expected": "match:\"ambiguous\"; vehicle:null; 2-5 candidates with a string differs_by",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/decode?vin=<VIN_AMBIGUOUS>"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "match": "ambiguous",
+      "vehicle": null,
+      "candidates": [
+        {
+          "vehicle_id": "<VEHICLE_ID>",
+          "vin": "<VIN_AMBIGUOUS>",
+          "brand": "toyota",
+          "make": "Toyota",
+          "model": {
+            "ar": "لاند كروزر",
+            "en": "Land Cruiser"
+          },
+          "model_code": "GRJ200",
+          "year": 2012,
+          "engine": "1GR 4000CC 24-VALVE DOHC EFI",
+          "trim": "GXR",
+          "transmission": "AT",
+          "market": "GR",
+          "production_date": null,
+          "differs_by": "trim"
+        },
+        {
+          "vehicle_id": "<VEHICLE_ID>",
+          "vin": "<VIN_AMBIGUOUS>",
+          "brand": "toyota",
+          "make": "Toyota",
+          "model": {
+            "ar": "لاند كروزر",
+            "en": "Land Cruiser"
+          },
+          "model_code": "GRJ200",
+          "year": 2012,
+          "engine": "1GR 4000CC 24-VALVE DOHC EFI",
+          "trim": "VXR",
+          "transmission": "AT",
+          "market": "GR",
+          "production_date": null,
+          "differs_by": "trim"
+        }
+      ]
+    }
+  }
+}

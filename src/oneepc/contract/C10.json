@@ -1,0 +1,59 @@
+{
+  "id": "C10",
+  "title": ".../parts/search?q=فلتر هواء تبع المكينة (pipe-05)",
+  "expected": "normalized \"فلتر هواء\"; air filter first, score >= 0.9, confirmed",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=%D9%81%D9%84%D8%AA%D8%B1+%D9%87%D9%88%D8%A7%D8%A1+%D8%AA%D8%A8%D8%B9+%D8%A7%D9%84%D9%85%D9%83%D9%8A%D9%86%D8%A9&lang=auto&limit=5"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "vehicle_id": "<VEHICLE_ID>",
+      "query": {
+        "q": "فلتر هواء تبع المكينة",
+        "q_en": null,
+        "normalized": "فلتر هواء",
+        "lang_detected": "ar"
+      },
+      "ambiguity": {
+        "is_ambiguous": false,
+        "reason": null,
+        "differs_by": null,
+        "question_hint": null
+      },
+      "results": [
+        {
+          "part_number": "<PN_AIR>",
+          "name": {
+            "ar": "فلتر هواء",
+            "en": "ELEMENT KIT, AIR CLEANER"
+          },
+          "category": {
+            "id": "engine",
+            "ar": "المحرك",
+            "en": "Engine"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "17801",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": null,
+            "side": null
+          },
+          "fitment": {
+            "status": "confirmed",
+            "conditions": []
+          },
+          "score": 1,
+          "match_type": "exact"
+        }
+      ]
+    }
+  }
+}

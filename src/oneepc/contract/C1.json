@@ -1,0 +1,42 @@
+{
+  "id": "C1",
+  "title": "GET /status with a key",
+  "expected": "200; ok:true; api_version, data_version, brands, markets",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/status"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "ok": true,
+      "api_version": "1.0",
+      "data_version": "<DATA_VERSION>",
+      "brands": ["toyota", "hyundai", "kia", "daihatsu"],
+      "markets": {
+        "toyota": ["GR", "US", "EU", "JP"],
+        "hyundai": [
+          "MES",
+          "EUR",
+          "HMA",
+          "HAC",
+          "AUS",
+          "RUS",
+          "HMI",
+          "HMB",
+          "HMT",
+          "HMJ",
+          "MEX",
+          "IDN"
+        ],
+        "kia": ["MES", "EUR", "AUS", "RUS", "HMB", "KMI", "KMA", "CKD"],
+        "daihatsu": ["09", "10", "11"]
+      }
+    }
+  }
+}

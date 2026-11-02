@@ -1,0 +1,24 @@
+{
+  "id": "C16",
+  "title": ".../parts/search with no q and no category",
+  "expected": "400 missing_query",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?lang=auto"
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "error": {
+        "code": "missing_query",
+        "message": "Send q or category.",
+        "request_id": "<REQUEST_ID>"
+      }
+    }
+  }
+}

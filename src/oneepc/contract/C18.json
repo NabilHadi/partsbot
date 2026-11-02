@@ -1,0 +1,24 @@
+{
+  "id": "C18",
+  "title": "GET /vehicles/unknown-id/parts/search?q=فلتر",
+  "expected": "404 vehicle_not_found",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/unknown-id/parts/search?q=%D9%81%D9%84%D8%AA%D8%B1"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "error": {
+        "code": "vehicle_not_found",
+        "message": "Unknown or expired vehicle_id. Decode the VIN again.",
+        "request_id": "<REQUEST_ID>"
+      }
+    }
+  }
+}

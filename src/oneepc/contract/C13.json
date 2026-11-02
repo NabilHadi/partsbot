@@ -1,0 +1,59 @@
+{
+  "id": "C13",
+  "title": ".../parts/search?q=<PN of this vehicle>",
+  "expected": "that part, part_number, 1.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=<PN_PAD_FR>"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "vehicle_id": "<VEHICLE_ID>",
+      "query": {
+        "q": "<PN_PAD_FR>",
+        "q_en": null,
+        "normalized": "<PN_PAD_FR>",
+        "lang_detected": "en"
+      },
+      "ambiguity": {
+        "is_ambiguous": false,
+        "reason": null,
+        "differs_by": null,
+        "question_hint": null
+      },
+      "results": [
+        {
+          "part_number": "<PN_PAD_FR>",
+          "name": {
+            "ar": "قماش امامي",
+            "en": "PAD KIT, DISC BRAKE, FRONT"
+          },
+          "category": {
+            "id": "chassis",
+            "ar": "الشاسيه",
+            "en": "Chassis"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "04465",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": "front",
+            "side": null
+          },
+          "fitment": {
+            "status": "confirmed",
+            "conditions": []
+          },
+          "score": 1,
+          "match_type": "part_number"
+        }
+      ]
+    }
+  }
+}

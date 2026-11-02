@@ -1,0 +1,87 @@
+{
+  "id": "C19",
+  "title": ".../parts/search on a part with conditional fitment",
+  "expected": "conditional with conditions[]; multiple_variants with a question_hint",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=%D9%87%D9%88%D8%A8&lang=auto&limit=5"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "vehicle_id": "<VEHICLE_ID>",
+      "query": {
+        "q": "هوب",
+        "q_en": null,
+        "normalized": "هوب",
+        "lang_detected": "ar"
+      },
+      "ambiguity": {
+        "is_ambiguous": true,
+        "reason": "multiple_variants",
+        "differs_by": "variant",
+        "question_hint": {
+          "ar": "توجد أكثر من نسخة من هذه القطعة لهذه السيارة حسب المواصفات. ما هي مواصفات سيارتك (مثل مقاس الفرامل أو نوع المحرك أو الدفع)؟",
+          "en": "There is more than one version of this part for this vehicle. Which specification is it (brake size, engine option, 2WD or 4WD)?"
+        }
+      },
+      "results": [
+        {
+          "part_number": "<PN_DISC_A>",
+          "name": {
+            "ar": "هوب امامي",
+            "en": "DISC, FRONT"
+          },
+          "category": {
+            "id": "chassis",
+            "ar": "الشاسيه",
+            "en": "Chassis"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "43512",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": "front",
+            "side": null
+          },
+          "fitment": {
+            "status": "conditional",
+            "conditions": ["variant <PN_DISC_A>"]
+          },
+          "score": 1,
+          "match_type": "exact"
+        },
+        {
+          "part_number": "<PN_DISC_B>",
+          "name": {
+            "ar": "هوب امامي",
+            "en": "DISC, FRONT"
+          },
+          "category": {
+            "id": "chassis",
+            "ar": "الشاسيه",
+            "en": "Chassis"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "43512",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": "front",
+            "side": null
+          },
+          "fitment": {
+            "status": "conditional",
+            "conditions": ["variant <PN_DISC_B>"]
+          },
+          "score": 1,
+          "match_type": "exact"
+        }
+      ]
+    }
+  }
+}

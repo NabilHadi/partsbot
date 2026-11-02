@@ -1,0 +1,24 @@
+{
+  "id": "C17",
+  "title": ".../parts/search?q=x&limit=99",
+  "expected": "400 invalid_param",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=x&limit=99"
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "error": {
+        "code": "invalid_param",
+        "message": "A query parameter is not valid.",
+        "request_id": "<REQUEST_ID>"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "id": "C7",
+  "title": "GET /vehicles/decode?vin=<valid but unknown>",
+  "expected": "404 vin_not_found",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/decode?vin=<VIN_UNKNOWN>"
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "error": {
+        "code": "vin_not_found",
+        "message": "No catalog vehicle was found for this VIN.",
+        "request_id": "<REQUEST_ID>"
+      }
+    }
+  }
+}

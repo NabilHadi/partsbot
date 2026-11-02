@@ -1,0 +1,23 @@
+{
+  "id": "C2",
+  "title": "GET /status with no key",
+  "expected": "401 invalid_key and X-Request-Id",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/status"
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>"
+    },
+    "body": {
+      "error": {
+        "code": "invalid_key",
+        "message": "Invalid API key.",
+        "request_id": "<REQUEST_ID>"
+      }
+    }
+  }
+}

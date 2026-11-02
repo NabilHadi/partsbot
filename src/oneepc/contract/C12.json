@@ -1,0 +1,59 @@
+{
+  "id": "C12",
+  "title": ".../parts/search?q=فحمات فرامل أمامية&q_en=brake pads&lang=auto&limit=5",
+  "expected": "front pads only; not ambiguous; score >= 0.9",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=%D9%81%D8%AD%D9%85%D8%A7%D8%AA+%D9%81%D8%B1%D8%A7%D9%85%D9%84+%D8%A3%D9%85%D8%A7%D9%85%D9%8A%D8%A9&q_en=brake+pads&lang=auto&limit=5"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "vehicle_id": "<VEHICLE_ID>",
+      "query": {
+        "q": "فحمات فرامل أمامية",
+        "q_en": "brake pads",
+        "normalized": "فحمات فرامل",
+        "lang_detected": "ar"
+      },
+      "ambiguity": {
+        "is_ambiguous": false,
+        "reason": null,
+        "differs_by": null,
+        "question_hint": null
+      },
+      "results": [
+        {
+          "part_number": "<PN_PAD_FR>",
+          "name": {
+            "ar": "قماش امامي",
+            "en": "PAD KIT, DISC BRAKE, FRONT"
+          },
+          "category": {
+            "id": "chassis",
+            "ar": "الشاسيه",
+            "en": "Chassis"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "04465",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": "front",
+            "side": null
+          },
+          "fitment": {
+            "status": "confirmed",
+            "conditions": []
+          },
+          "score": 0.9,
+          "match_type": "synonym"
+        }
+      ]
+    }
+  }
+}

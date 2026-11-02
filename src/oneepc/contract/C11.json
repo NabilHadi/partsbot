@@ -1,0 +1,87 @@
+{
+  "id": "C11",
+  "title": ".../parts/search?q=قماشات&lang=auto&limit=5",
+  "expected": "ambiguous: multiple_positions, differs_by position, question_hint.ar; front and rear pads",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=%D9%82%D9%85%D8%A7%D8%B4%D8%A7%D8%AA&lang=auto&limit=5"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "vehicle_id": "<VEHICLE_ID>",
+      "query": {
+        "q": "قماشات",
+        "q_en": null,
+        "normalized": "قماشات",
+        "lang_detected": "ar"
+      },
+      "ambiguity": {
+        "is_ambiguous": true,
+        "reason": "multiple_positions",
+        "differs_by": "position",
+        "question_hint": {
+          "ar": "هل تحتاج القطعة الأمامية أو الخلفية؟",
+          "en": "Do you need the front or the rear part?"
+        }
+      },
+      "results": [
+        {
+          "part_number": "<PN_PAD_FR>",
+          "name": {
+            "ar": "قماش امامي",
+            "en": "PAD KIT, DISC BRAKE, FRONT"
+          },
+          "category": {
+            "id": "chassis",
+            "ar": "الشاسيه",
+            "en": "Chassis"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "04465",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": "front",
+            "side": null
+          },
+          "fitment": {
+            "status": "confirmed",
+            "conditions": []
+          },
+          "score": 0.9,
+          "match_type": "synonym"
+        },
+        {
+          "part_number": "<PN_PAD_RR>",
+          "name": {
+            "ar": "قماش خلفي",
+            "en": "PAD KIT, DISC BRAKE, REAR"
+          },
+          "category": {
+            "id": "chassis",
+            "ar": "الشاسيه",
+            "en": "Chassis"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "04466",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": "rear",
+            "side": null
+          },
+          "fitment": {
+            "status": "confirmed",
+            "conditions": []
+          },
+          "score": 0.9,
+          "match_type": "synonym"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "id": "C9",
+  "title": ".../parts/search?q=فلتر زيت&lang=auto&limit=5",
+  "expected": "oil filter first: score 1.0, exact, confirmed, not ambiguous",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=%D9%81%D9%84%D8%AA%D8%B1+%D8%B2%D9%8A%D8%AA&lang=auto&limit=5"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "vehicle_id": "<VEHICLE_ID>",
+      "query": {
+        "q": "فلتر زيت",
+        "q_en": null,
+        "normalized": "فلتر زيت",
+        "lang_detected": "ar"
+      },
+      "ambiguity": {
+        "is_ambiguous": false,
+        "reason": null,
+        "differs_by": null,
+        "question_hint": null
+      },
+      "results": [
+        {
+          "part_number": "<PN_OIL>",
+          "name": {
+            "ar": "فلتر زيت",
+            "en": "ELEMENT KIT, OIL FILTER"
+          },
+          "category": {
+            "id": "engine",
+            "ar": "المحرك",
+            "en": "Engine"
+          },
+          "diagram_id": "<DIAGRAM_ID>",
+          "callout": "15601",
+          "quantity_per_vehicle": null,
+          "attributes": {
+            "position": null,
+            "side": null
+          },
+          "fitment": {
+            "status": "confirmed",
+            "conditions": []
+          },
+          "score": 1,
+          "match_type": "exact"
+        }
+      ]
+    }
+  }
+}

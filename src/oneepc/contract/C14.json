@@ -1,0 +1,33 @@
+{
+  "id": "C14",
+  "title": ".../parts/search?q=<PN of another model>",
+  "expected": "results:[]",
+  "request": {
+    "method": "GET",
+    "path": "/api/bot/v1/vehicles/<VEHICLE_ID>/parts/search?q=<PN_OTHER_MODEL>"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "x-request-id": "<REQUEST_ID>",
+      "x-data-version": "<DATA_VERSION>",
+      "x-ratelimit-remaining": "<REMAINING>"
+    },
+    "body": {
+      "vehicle_id": "<VEHICLE_ID>",
+      "query": {
+        "q": "<PN_OTHER_MODEL>",
+        "q_en": null,
+        "normalized": "<PN_OTHER_MODEL>",
+        "lang_detected": "en"
+      },
+      "ambiguity": {
+        "is_ambiguous": false,
+        "reason": null,
+        "differs_by": null,
+        "question_hint": null
+      },
+      "results": []
+    }
+  }
+}
