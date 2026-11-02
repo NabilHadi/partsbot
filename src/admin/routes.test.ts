@@ -90,6 +90,35 @@ describe("/admin auth", () => {
     expect(p2.body).toContain("no call log");
   });
 
+  it("app page shows the primary and the fallback provider with both key checks", async () => {
+    const f = fakeDb();
+    const ai = {
+      enabled: true, reason: null, defaultProvider: "deepseek",
+      chains: [
+        { provider: "deepseek", model: "deepseek-flash", fallbackProvider: "openrouter", fallbackModel: "google/gemini-3.8-flash", keyConfigured: true },
+        { provider: "openrouter", model: "google/gemini-3.8-flash", fallbackProvider: null, fallbackModel: null, keyConfigured: true },
+      ],
+      primary: { provider: "deepseek", model: "deepseek-flash", keyConfigured: true },
+      fallback: { provider: "openrouter", model: "google/gemini-3.8-flash", keyConfigured: true },
+      warnings: [],
+    };
+    const a = buildServer({
+      logger: false,
+      admin: {
+        db: f.db, password: PW, status: { ...STATUS, ai }, aiHealth: async () => { throw new Error("no table"); },
+        aiCheck: async () => ({ ok: true, detail: "model available, key accepted" }),
+        aiFallbackCheck: async () => ({ ok: false, detail: "key rejected (HTTP 401)" }),
+      },
+    });
+    const { page } = await loggedIn(a);
+    expect(page.body).toMatch(/AI primary \(default for all shops\)<\/th><td><strong>deepseek<\/strong> <code>deepseek-flash<\/code>/);
+    expect(page.body).toMatch(/AI fallback<\/th><td><strong>openrouter<\/strong> <code>google\/gemini-3.8-flash<\/code>/);
+    expect(page.body).toContain("AI key check (fallback)</th><td><strong>FAILED</strong>");
+    const b = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, ai: { ...ai, fallback: { ...ai.fallback, keyConfigured: false }, warnings: ["AI_FALLBACK_PROVIDER=openrouter has no API key: retries stay on the same provider"] } }, aiHealth: async () => { throw new Error("no table"); } } });
+    const { page: p2 } = await loggedIn(b);
+    expect(p2.body).toContain("AI_FALLBACK_PROVIDER=openrouter has no API key");
+  });
+
   it("synonym changes need a session and a CSRF token", async () => {
     const { a, queries } = app(PW);
     const anonPost = await a.inject({ method: "POST", url: "/admin/synonyms", headers: { "content-type": "application/x-www-form-urlencoded" }, payload: "term=x&canonical_ar=y&canonical_en=z" });

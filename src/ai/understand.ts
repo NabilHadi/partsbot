@@ -138,6 +138,7 @@ export async function understandMessage(provider: AiProvider, input: UnderstandI
       jsonSchema: UNDERSTAND_JSON_SCHEMA as unknown as Record<string, unknown>,
       temperature: 0.1,
       maxOutputTokens: 2048,
+      accept: (d) => understandSchema.safeParse(d).success,
     });
     const parsed = understandSchema.safeParse(r.data);
     if (!parsed.success) return { ok: false, reason: "schema_invalid", usage: r.usage, latencyMs: r.latencyMs, model: r.model };

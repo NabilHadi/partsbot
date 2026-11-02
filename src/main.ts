@@ -56,6 +56,7 @@ const app = buildServer({
       return { real, mock };
     },
     ...(aiSetup.enabled ? { aiCheck: () => aiSetup.provider.check() } : {}),
+    ...(aiSetup.enabled && aiSetup.provider.checkFallback ? { aiFallbackCheck: () => aiSetup.provider.checkFallback!() } : {}),
     status: {
       dryRun: config.DRY_RUN,
       oneepcBaseUrl: config.ONEEPC_BASE_URL,
@@ -71,6 +72,9 @@ const app = buildServer({
         reason: aiSetup.enabled ? null : aiSetup.reason,
         defaultProvider: config.AI_PROVIDER,
         chains: aiSetup.chains,
+        primary: aiSetup.primary,
+        fallback: aiSetup.fallback,
+        warnings: aiSetup.warnings,
       },
     },
   },

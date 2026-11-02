@@ -61,6 +61,7 @@ export async function composeReply(provider: AiProvider, input: ComposeInput): P
       jsonSchema: COMPOSE_JSON_SCHEMA,
       temperature: 0.3,
       maxOutputTokens: 2048,
+      accept: (d) => composeSchema.safeParse(d).success,
     });
     const parsed = composeSchema.safeParse(r.data);
     if (!parsed.success) return { ok: false, reason: "schema_invalid", validator: null, usage: r.usage, latencyMs: r.latencyMs, model: r.model };

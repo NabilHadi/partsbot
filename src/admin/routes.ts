@@ -45,6 +45,10 @@ export interface AppStatusInfo {
     defaultProvider: string;
     /** One per provider; the default first. fallback* = where the one retry goes. */
     chains: { provider: string; model: string; fallbackProvider: string | null; fallbackModel: string | null; keyConfigured: boolean }[];
+    /** Server default: AI_PROVIDER + AI_MODEL, and AI_FALLBACK_PROVIDER + AI_FALLBACK_MODEL (null = none set). */
+    primary?: { provider: string; model: string; keyConfigured: boolean };
+    fallback?: { provider: string; model: string; keyConfigured: boolean } | null;
+    warnings?: string[];
   };
 }
 
@@ -64,6 +68,8 @@ export interface AdminDeps {
   maxUploadBytes?: number;
   /** Live AI check (is the model reachable with the key?). Never returns the key. */
   aiCheck?: () => Promise<{ ok: boolean; detail: string }>;
+  /** Same check for the default chain's fallback step (null = the retry uses the same model). */
+  aiFallbackCheck?: () => Promise<{ ok: boolean; detail: string } | null>;
   /** Recent real calls (default: table ai_attempts in deps.db). */
   aiHealth?: () => Promise<AiHealth & { lastThreeFailed: boolean }>;
   /** Called after an admin edit of the synonym list (drops the server's cache). */
@@ -639,6 +645,21 @@ ${synonymsTable(req, rows)}`, flash, code);
       const c = await deps.aiCheck().catch(() => ({ ok: false, detail: "check failed" }));
       keyCheck = html`${c.ok ? "OK" : html`<strong>FAILED</strong>`} <span class="hint">${c.detail}</span>`;
     }
+    let fbCheck: Raw = html`<span class="muted">not checked</span>`;
+    if (a.enabled && deps.aiFallbackCheck) {
+      const c = await deps.aiFallbackCheck().catch(() => ({ ok: false, detail: "check failed" }));
+      fbCheck = c === null ? html`<span class="muted">no separate fallback</span>` : html`${c.ok ? "OK" : html`<strong>FAILED</strong>`} <span class="hint">${c.detail}</span>`;
+    }
+    const route = (r: { provider: string; model: string; keyConfigured: boolean }) =>
+      html`<strong>${r.provider}</strong> <code>${r.model}</code> · API key configured: ${r.keyConfigured ? "yes" : html`<strong>no</strong>`}`;
+    const defaultChain = a.chains.find((c) => c.provider === a.defaultProvider);
+    const primaryRow = a.primary ? route(a.primary) : defaultChain ? route(defaultChain) : html`<span class="muted">unknown</span>`;
+    const fallbackRow = a.fallback
+      ? html`${route(a.fallback)} <span class="hint">used once when the primary times out, errors or returns invalid JSON</span>`
+      : defaultChain?.fallbackModel
+        ? html`${defaultChain.fallbackProvider ?? defaultChain.provider} <code>${defaultChain.fallbackModel}</code> <span class="hint">same-provider retry (no AI_FALLBACK_PROVIDER)</span>`
+        : html`<span class="muted">none: the one retry uses the primary model again</span>`;
+    const warn = (a.warnings ?? []).length ? html`<tr><th>AI warnings</th><td>${(a.warnings ?? []).map((w, i) => html`${i ? html`<br>` : ""}<strong>${w}</strong>`)}</td></tr>` : html``;
     let overrides: Raw = html``;
     try {
       const r = await deps.db.query<{ name: string; p: string }>(
@@ -651,8 +672,11 @@ ${synonymsTable(req, rows)}`, flash, code);
       html`<li>${c.provider === a.defaultProvider ? html`<strong>${c.provider}</strong> (default)` : c.provider} · <code>${c.model}</code>${c.fallbackModel ? html` · retry on ${c.fallbackProvider ? html`${c.fallbackProvider} ` : ""}<code>${c.fallbackModel}</code>` : ""} · API key configured: ${c.keyConfigured ? "yes" : "no"}</li>`;
     return html`<tr><th>AI</th><td>${a.enabled ? html`<strong>ON</strong>` : html`off <span class="hint">${a.reason === "no_key" ? "AI_ENABLED is on but no API key is configured" : "AI_ENABLED=false"}: rules + templates only</span>`} <span class="hint">each shop also needs “AI assistant” switched on</span></td></tr>
 <tr><th>AI recent calls</th><td>${health} <span class="hint">from real bot calls (codes only, no text)</span></td></tr>
-<tr><th>AI providers and models</th><td><ul>${a.chains.map(chainRow)}</ul></td></tr>
-<tr><th>AI key check (default model)</th><td>${keyCheck} <span class="hint">says only whether the key and model are accepted, not whether calls succeed</span></td></tr>
+<tr><th>AI primary (default for all shops)</th><td>${primaryRow}</td></tr>
+<tr><th>AI fallback</th><td>${fallbackRow}</td></tr>
+${warn}<tr><th>AI providers and models</th><td><ul>${a.chains.map(chainRow)}</ul> <span class="hint">a shop's “AI provider” setting picks one of these; server_default = the primary</span></td></tr>
+<tr><th>AI key check (primary)</th><td>${keyCheck} <span class="hint">says only whether the key and model are accepted, not whether calls succeed</span></td></tr>
+<tr><th>AI key check (fallback)</th><td>${fbCheck}</td></tr>
 ${overrides}`;
   }
 

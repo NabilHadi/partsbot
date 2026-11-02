@@ -32,14 +32,27 @@ Scope: shop customer service only (parts, stock, prices, VIN, staff handoff). Of
 
 ### Providers and models
 
-All three sit behind `AiProvider` (`provider.ts`). A `ChainProvider` makes at most two attempts: the main model, then ONE retry (on timeout, rate limit, overload, empty or bad JSON; also on quota/auth/HTTP errors when the retry goes to another model or provider). Same zod schemas, validators and timeout for every provider.
+All three sit behind `AiProvider` (`provider.ts`). A `ChainProvider` makes at most two attempts: the main model, then ONE retry (on timeout, rate limit, overload, HTTP error, empty or bad JSON, or JSON that fails the stage's zod schema (`schema_invalid`); also on quota/auth when the retry goes to another model or provider). Same zod schemas, validators and timeout for every provider.
+
+**Primary + fallback (current setup, `logs/env.sh`)**: DeepSeek `deepseek-flash` is the primary for every shop; OpenRouter `google/gemini-3.8-flash` is the fallback, used once when the DeepSeek attempt times out, errors or returns invalid JSON.
+
+```sh
+AI_PROVIDER=deepseek
+AI_MODEL=deepseek-flash
+AI_FALLBACK_PROVIDER=openrouter
+AI_FALLBACK_MODEL=google/gemini-3.8-flash
+```
+
+A shop with `aiProvider=gemini` (or `deepseek`) uses that provider first and the same fallback. A shop with `aiProvider=openrouter` (the fallback provider itself) retries on `OPENROUTER_FALLBACK_MODEL` or the same model. If the fallback provider has no key, retries stay on the primary provider and `/admin/app` shows a warning. `/admin/app` shows the primary, the fallback and a key check for each.
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `AI_PROVIDER` | `gemini` | Server default provider |
-| `AI_FALLBACK_PROVIDER` | (unset) | When set and different from the provider in use, the retry goes to that provider's main model (e.g. DeepSeek first, Gemini Flash-Lite on retry) |
+| `AI_PROVIDER` | `deepseek` | Primary (server default) provider |
+| `AI_MODEL` | (unset) | Primary model; unset = the primary provider's `*_MODEL` |
+| `AI_FALLBACK_PROVIDER` | (unset) | Fallback provider for the one retry; may be another provider. Unset = retry within the same provider |
+| `AI_FALLBACK_MODEL` | (unset) | Fallback model; unset = the fallback provider's `*_MODEL` |
 | `AI_TIMEOUT_MS` | 25000 | Per attempt |
-| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | `gemini-3.8-flash`, none | Legacy names `AI_MODEL` / `AI_FALLBACK_MODEL` still work |
+| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | `gemini-3.8-flash`, none | `AI_MODEL` / `AI_FALLBACK_MODEL` are no longer Gemini aliases: they now mean the primary / fallback model |
 | `DEEPSEEK_MODEL`, `DEEPSEEK_FALLBACK_MODEL` | `deepseek-flash`, none | `deepseek-flash` = DeepSeek-V4.1-Flash (V4-Flash is retired; `deepseek-v4-flash` is a legacy alias of the same model) |
 | `DEEPSEEK_THINKING` | `disabled` | `low` / `high` = thinking mode (slower, costs output tokens) |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible |

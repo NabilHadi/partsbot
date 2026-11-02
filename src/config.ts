@@ -43,11 +43,16 @@ const envSchema = z
     .string()
     .optional()
     .transform((v) => (v ?? "").trim().toLowerCase() === "true"),
-  /** Server-default provider. A shop can override it with its `aiProvider` setting (e.g. the test shop on DeepSeek). */
-  AI_PROVIDER: z.enum(["gemini", "deepseek", "openrouter"]).default("gemini"),
+  /** Primary (server-default) provider. A shop can override it with its `aiProvider` setting. */
+  AI_PROVIDER: z.enum(["gemini", "deepseek", "openrouter"]).default("deepseek"),
+  /** Primary model. Unset = the primary provider's *_MODEL. */
+  AI_MODEL: OPT_STR,
+  /** Fallback model (on AI_FALLBACK_PROVIDER). Unset = that provider's *_MODEL. */
+  AI_FALLBACK_MODEL: OPT_STR,
   /**
-   * Optional cross-provider retry: when set and different from the provider in use, the ONE retry goes to this
-   * provider's main model (e.g. DeepSeek first, Gemini Flash-Lite on retry). Unset = retry within the same provider.
+   * Fallback provider: when the primary attempt times out, errors or returns invalid JSON, the ONE retry goes here
+   * (with AI_FALLBACK_MODEL). It may be another provider (e.g. DeepSeek first, OpenRouter Gemini on retry).
+   * Unset (or no key) = retry within the same provider.
    */
   AI_FALLBACK_PROVIDER: z
     .string()
@@ -98,10 +103,8 @@ export type Config = z.infer<typeof envSchema>;
 
 /** Parse and validate environment variables. Throws a readable error if invalid. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  // Legacy names (before DeepSeek): AI_MODEL / AI_FALLBACK_MODEL were the Gemini models.
+  // AI_MODEL / AI_FALLBACK_MODEL used to be Gemini-only names; they are now the primary / fallback models.
   const e = { ...env };
-  if (!e.GEMINI_MODEL && e.AI_MODEL) e.GEMINI_MODEL = e.AI_MODEL;
-  if (!e.GEMINI_FALLBACK_MODEL && e.AI_FALLBACK_MODEL) e.GEMINI_FALLBACK_MODEL = e.AI_FALLBACK_MODEL;
   const parsed = envSchema.safeParse(e);
   if (!parsed.success) {
     const problems = parsed.error.issues

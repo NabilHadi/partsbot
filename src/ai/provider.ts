@@ -25,6 +25,11 @@ export interface JsonRequest {
   jsonSchema: Record<string, unknown>;
   temperature?: number;
   maxOutputTokens?: number;
+  /**
+   * The stage's own schema check (zod). Parsed JSON that fails it counts as a failed attempt ("schema_invalid"),
+   * so the one retry goes to the fallback. Callers still validate the final result themselves.
+   */
+  accept?: (data: unknown) => boolean;
 }
 
 export interface JsonResult {
@@ -39,7 +44,7 @@ export interface JsonResult {
   attempts: number;
 }
 
-export type AiErrorReason = "timeout" | "quota" | "rate_limited" | "overloaded" | "http_error" | "auth" | "bad_json" | "blocked" | "empty" | "network" | "disabled";
+export type AiErrorReason = "timeout" | "quota" | "rate_limited" | "overloaded" | "http_error" | "auth" | "bad_json" | "blocked" | "empty" | "network" | "disabled" | "schema_invalid";
 
 export class AiError extends Error {
   constructor(
@@ -53,7 +58,7 @@ export class AiError extends Error {
   }
   /** Worth one retry. */
   get retryable(): boolean {
-    return ["timeout", "rate_limited", "overloaded", "http_error", "bad_json", "empty", "network"].includes(this.reason);
+    return ["timeout", "rate_limited", "overloaded", "http_error", "bad_json", "empty", "network", "schema_invalid"].includes(this.reason);
   }
 }
 
@@ -66,6 +71,8 @@ export interface AiProvider {
   generateJson(req: JsonRequest): Promise<JsonResult>;
   /** Cheap liveness check for /admin/app: is the configured model visible with this key? Never throws. */
   check(): Promise<{ ok: boolean; detail: string }>;
+  /** Same check for the fallback step, when it is another provider or model. Never throws. */
+  checkFallback?(): Promise<{ ok: boolean; detail: string } | null>;
 }
 
 /** One HTTP attempt, reported to an optional observer (recent-call health on /admin/app). Metrics only, never text. */
@@ -130,6 +137,7 @@ export class ChainProvider implements AiProvider {
       const t0 = Date.now();
       try {
         const r = await step.backend.attempt(step.model, req);
+        if (req.accept && !safeAccept(req.accept, r.data)) throw new AiError("schema_invalid", "stage schema", r.usage);
         addUsage(total, r.usage);
         this.emit(callId, true, step, req, attempt, null, Date.now() - t0, r.usage);
         return { data: r.data, usage: total, latencyMs: Date.now() - started, model: step.model, provider: step.backend.name, attempts: attempt + 1 };
@@ -151,6 +159,12 @@ export class ChainProvider implements AiProvider {
     return this.steps[0].backend.checkModel(this.model);
   }
 
+  async checkFallback(): Promise<{ ok: boolean; detail: string } | null> {
+    const [a, b] = this.steps;
+    if (a.backend === b.backend && a.model === b.model) return null;
+    return b.backend.checkModel(b.model).catch(() => ({ ok: false, detail: "check failed" }));
+  }
+
   private emit(callId: string, final: boolean, step: ChainStep, req: JsonRequest, attempt: number, reason: AiErrorReason | null, latencyMs: number, u: AiUsage): void {
     if (!this.observer) return;
     try {
@@ -161,6 +175,14 @@ export class ChainProvider implements AiProvider {
     } catch {
       /* observers are best effort */
     }
+  }
+}
+
+function safeAccept(accept: (d: unknown) => boolean, data: unknown): boolean {
+  try {
+    return accept(data);
+  } catch {
+    return false;
   }
 }
 

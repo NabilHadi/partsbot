@@ -51,6 +51,7 @@ export async function selectCandidates(provider: AiProvider, input: SelectInput)
       jsonSchema: SELECT_JSON_SCHEMA,
       temperature: 0,
       maxOutputTokens: 1024,
+      accept: (d) => selectSchema.safeParse(d).success,
     });
     const parsed = selectSchema.safeParse(r.data);
     if (!parsed.success) return { ok: false, reason: "schema_invalid", usage: r.usage, latencyMs: r.latencyMs, model: r.model };
