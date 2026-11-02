@@ -7,16 +7,18 @@
 //             language=ar afterHoursMode=note_only "hours.fri=08:00-12:00,16:00-23:00" hours.sat=closed
 //   npm run shop -- unset <shop-id> key [key ...]            (back to the default; "hours" resets all days)
 //   npm run shop -- status <shop-id> active|paused|closed
-//   npm run shop -- staff-add <shop-id> --name "<name>" --phone <05XXXXXXXX|+E164> [--no-notify]   (needs SHOP_SECRETS_KEY)
+//   npm run shop -- staff-add <shop-id> --name "<name>" [--no-notify]
+//        the number is read from stdin (e.g. `printf '05XXXXXXXX' | npm run shop -- staff-add ...`) or typed at the
+//        prompt; never a command-line argument (argv is visible in `ps` and shell history).
 //   npm run shop -- staff-remove <shop-id> --name "<name>"
-// Staff numbers are encrypted before they are stored and are only ever printed masked (last two digits).
+// Staff numbers are stored as normalized E.164 and only ever printed masked (last 4 digits).
 import { parseArgs } from "node:util";
 import { addStaff, AdminInputError, applySet, applyUnset, parseAssignments, removeStaff, renderConfig, type RawConfig } from "../admin/shop-admin.js";
-import { loadSecretsKey, MissingKeyError } from "../crypto/field-crypto.js";
+import { createInterface } from "node:readline/promises";
 import { shopConfigSchema } from "../bot/shop-config.js";
 import { createPool, type Db } from "../db/pool.js";
 
-const USAGE = `usage: npm run shop -- list | show <id> | create --name <n> [...] | set <id> key=value... [--dry-run] | unset <id> key... | status <id> <active|paused|closed> | staff-add <id> --name <n> --phone <p> | staff-remove <id> --name <n>`;
+const USAGE = `usage: npm run shop -- list | show <id> | create --name <n> [...] | set <id> key=value... [--dry-run] | unset <id> key... | status <id> <active|paused|closed> | staff-add <id> --name <n> (number via stdin/prompt) | staff-remove <id> --name <n>`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -27,7 +29,7 @@ const { values, positionals } = parseArgs({
     waba: { type: "string" },
     plan: { type: "string" },
     test: { type: "boolean", default: false },
-    phone: { type: "string" },
+    phone: { type: "string" }, // rejected below: numbers never go on the command line
     "no-notify": { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
   },
@@ -38,9 +40,26 @@ function fail(msg: string, code = 2): never {
   process.exit(code);
 }
 
+if (values.phone !== undefined) fail("--phone is not accepted: pipe the number on stdin or type it at the prompt (argv is visible in ps and shell history)");
+
 const [cmd, id, ...rest] = positionals;
 if (!cmd) fail("missing command");
 if (cmd !== "list" && cmd !== "create" && !(id && /^[0-9a-f-]{36}$/i.test(id))) fail("missing or invalid <shop-id> (a uuid; see: npm run shop -- list)");
+
+/** The staff number from stdin (piped) or an interactive prompt. Never echoed back. */
+async function readPhone(): Promise<string> {
+  if (process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+    try {
+      return (await rl.question("WhatsApp number (05XXXXXXXX or +E164): ")).trim();
+    } finally {
+      rl.close();
+    }
+  }
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(c as Buffer);
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
 
 interface ShopRow { id: string; name: string; city: string | null; zernio_account_id: string | null; waba_id: string | null; plan: string; status: string; config: RawConfig; updated_at: Date }
 
@@ -133,9 +152,10 @@ try {
       break;
     }
     case "staff-add": {
-      if (!values.name || !values.phone) fail("staff-add needs --name and --phone");
-      const key = loadSecretsKey();
-      await update(db, id as string, (raw) => addStaff(raw, id as string, key, { name: values.name as string, phone: values.phone as string, notify: !values["no-notify"] }));
+      if (!values.name) fail("staff-add needs --name");
+      const phone = await readPhone();
+      if (!phone) fail("no phone number given (pipe it on stdin or type it at the prompt)");
+      await update(db, id as string, (raw) => addStaff(raw, { name: values.name as string, phone, notify: !values["no-notify"] }));
       break;
     }
     case "staff-remove":
@@ -146,7 +166,7 @@ try {
       fail(`unknown command "${cmd}"`);
   }
 } catch (err) {
-  if (err instanceof AdminInputError || err instanceof MissingKeyError) {
+  if (err instanceof AdminInputError) {
     console.error(err.message);
     process.exitCode = 2;
   } else {

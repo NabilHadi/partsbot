@@ -6,8 +6,9 @@ import { z } from "zod";
  * defaults below, so an empty `{}` is a valid (and deliberately conservative) configuration. Unknown keys are
  * rejected (a typo must not silently do nothing).
  *
- * Staff WhatsApp numbers are personal data (PDPL): they are only ever stored ENCRYPTED (`phoneEnc`, see
- * src/crypto/field-crypto.ts) plus the last two digits for masked display. A plain `phone` key is rejected.
+ * Staff WhatsApp numbers are personal data (PDPL). They are stored as plain normalized E.164 strings (no field
+ * encryption for now, by Nabil's decision 2026-11-02), are never shown to customers, never sent to the OneEPC
+ * gateway, and are only ever printed/logged masked (`maskPhone`: last 4 digits).
  */
 
 const hhmm = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/, "use HH:MM, 24-hour");
@@ -96,12 +97,16 @@ export function normalizeWhatsAppNumber(input: string): string | null {
   return null;
 }
 
+/** "•••••••••4567": the last 4 digits only. The ONLY form a staff number may take in logs and CLI output. */
+export function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  return `•••••••••${digits.slice(-4)}`;
+}
+
 export const staffMemberSchema = z.strictObject({
   name: z.string().trim().min(1).max(60),
-  /** AES-256-GCM ciphertext of the E.164 number ("v1.<iv>.<tag>.<data>", base64url). Never the plain number. */
-  phoneEnc: z.string().regex(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/, "phoneEnc must be an encrypted value (use: npm run shop -- staff-add)"),
-  /** Last two digits, for masked display ("+966•••••••67" style) without decrypting. */
-  phoneHint: z.string().regex(/^\d{2}$/),
+  /** WhatsApp number, normalized E.164 (+9665XXXXXXXX). Set via `npm run shop -- staff-add` (normalizes). */
+  phone: z.string().regex(/^\+[1-9]\d{7,14}$/, "phone must be a normalized E.164 number (use: npm run shop -- staff-add)"),
   /** Receives handoff notifications (the notification sender is the next step; only stored for now). */
   notify: z.boolean().default(true),
 });
@@ -141,7 +146,7 @@ export const shopConfigSchema = z.strictObject({
   staffHandoffName: z.string().max(80).default(""),
   /** PUBLIC shop line shown to customers in handoff replies (not a personal number). Empty = none. */
   staffHandoffPhone: z.string().max(30).default(""),
-  /** Staff who handle handoffs (names + encrypted WhatsApp numbers). Never shown to customers or logged. */
+  /** Staff who handle handoffs (names + WhatsApp numbers). Never shown to customers or logged. */
   staff: z.array(staffMemberSchema).max(10).default([]),
 
   // ---- stock data ----

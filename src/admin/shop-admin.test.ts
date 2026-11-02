@@ -1,10 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decryptField, staffPhoneContext } from "../crypto/field-crypto.js";
 import { addStaff, AdminInputError, applySet, applyUnset, parseAssignments, parseWindows, removeStaff, renderConfig } from "./shop-admin.js";
 
 const SHOP = "5dcb8a94-2ef8-4469-a742-1bccdc4259f9";
-const KEY = randomBytes(32);
 
 describe("shop admin", () => {
   it("parses key=value with types and hours specs", () => {
@@ -43,25 +40,29 @@ describe("shop admin", () => {
     expect(applyUnset({ showPartNumbers: false }, ["showPartNumbers"]).raw).toEqual({});
   });
 
-  it("staff: phone normalized + encrypted, never stored or shown in clear", () => {
-    const { raw, config } = addStaff({}, SHOP, KEY, { name: "أبو فهد", phone: "0551234567" });
-    const json = JSON.stringify(raw);
-    expect(json).not.toContain("551234567");
+  it("staff: phone stored as normalized E.164, shown masked (last 4 digits only)", () => {
+    const { raw, config } = addStaff({}, { name: "أبو فهد", phone: "055 123 4567" });
+    expect(raw).toEqual({ staff: [{ name: "أبو فهد", phone: "+966551234567", notify: true }] });
     const s = config.staff[0]!;
-    expect(s.phoneHint).toBe("67");
-    expect(decryptField(s.phoneEnc, KEY, staffPhoneContext(SHOP))).toBe("+966551234567");
+    expect(s.phone).toBe("+966551234567");
     const shown = renderConfig(raw, config).join("\n");
     expect(shown).toContain("أبو فهد");
-    expect(shown).toContain("•67");
-    expect(shown).not.toContain("551234567");
-    expect(shown).not.toContain(s.phoneEnc);
-    expect(() => addStaff(raw, SHOP, KEY, { name: "أبو فهد", phone: "0559999999" })).toThrow(/already exists/);
-    expect(() => addStaff(raw, SHOP, KEY, { name: "x", phone: "0112345678" })).toThrow(/not a valid/);
+    expect(shown).toContain("•4567");
+    expect(shown).not.toContain("55123");
+    expect(shown).not.toContain("+966551234567");
+    expect(() => addStaff(raw, { name: "أبو فهد", phone: "0559999999" })).toThrow(/already exists/);
+    expect(() => addStaff(raw, { name: "x", phone: "0112345678" })).toThrow(/not a valid/);
+    expect(addStaff(raw, { name: "y", phone: "0559999999", notify: false }).config.staff[1]?.notify).toBe(false);
     expect(removeStaff(raw, "أبو فهد").config.staff).toEqual([]);
   });
 
-  it("a ciphertext made for one shop does not decrypt for another", () => {
-    const { config } = addStaff({}, SHOP, KEY, { name: "a", phone: "0551234567" });
-    expect(() => decryptField(config.staff[0]!.phoneEnc, KEY, staffPhoneContext("00000000-0000-0000-0000-000000000000"))).toThrow();
+  it("validation errors never echo a phone number", () => {
+    try {
+      applySet({ staff: [{ name: "a", phone: "0551234567" }] }, parseAssignments(["showPartNumbers=false"]));
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect((e as Error).message).toMatch(/staff\.0\.phone/);
+      expect((e as Error).message).not.toContain("0551234567");
+    }
   });
 });

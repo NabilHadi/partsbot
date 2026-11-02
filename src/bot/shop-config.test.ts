@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { encryptField, staffPhoneContext } from "../crypto/field-crypto.js";
 import {
-  DEFAULT_SHOP_CONFIG, closedPeriodKey, localTime, normalizeWhatsAppNumber, parseShopConfig, staffAvailability, type BusinessHours,
+  DEFAULT_SHOP_CONFIG, closedPeriodKey, localTime, maskPhone, normalizeWhatsAppNumber, parseShopConfig, staffAvailability, type BusinessHours,
 } from "./shop-config.js";
 
-const enc = (phone: string) => encryptField(phone, Buffer.alloc(32, 7), staffPhoneContext("shop_1"));
 
 describe("parseShopConfig", () => {
   it("an empty object is valid and conservative", () => {
@@ -44,19 +42,26 @@ describe("parseShopConfig", () => {
     ["overnight window runs into the next day's shift", { businessHours: { days: { thu: [{ open: "16:00", close: "09:00" }], fri: [{ open: "08:00", close: "12:00" }] } } }],
     ["Saturday overnight runs into Sunday", { businessHours: { days: { sat: [{ open: "20:00", close: "10:00" }], sun: [{ open: "09:00", close: "12:00" }] } } }],
     ["five windows in a day", { businessHours: { days: { sun: ["01", "03", "05", "07", "09"].map((h) => ({ open: `${h}:00`, close: `${h}:30` })) } } }],
-    ["staff with a plain phone", { staff: [{ name: "أبو فهد", phone: "+966501234567" }] }],
-    ["staff phoneEnc not encrypted", { staff: [{ name: "أبو فهد", phoneEnc: "+966501234567", phoneHint: "67" }] }],
-    ["staff without a name", { staff: [{ name: " ", phoneEnc: enc("+966501234567"), phoneHint: "67" }] }],
+    ["staff phone not normalized", { staff: [{ name: "أبو فهد", phone: "0501234567" }] }],
+    ["staff with the old encrypted shape", { staff: [{ name: "أبو فهد", phoneEnc: "v1.a.b.c", phoneHint: "67" }] }],
+    ["staff without a name", { staff: [{ name: " ", phone: "+966501234567" }] }],
   ])("rejects invalid config: %s", (_label, cfg) => {
     expect(() => parseShopConfig(cfg)).toThrow();
   });
-  it("accepts split shifts, adjacent windows, overnight windows, 24:00 and encrypted staff", () => {
+  it("accepts split shifts, adjacent windows, overnight windows, 24:00 and staff", () => {
     const c = parseShopConfig({
       businessHours: { days: { fri: [{ open: "08:00", close: "12:00" }, { open: "16:00", close: "23:00" }], thu: [{ open: "16:00", close: "02:00" }], sun: [{ open: "08:00", close: "12:00" }, { open: "12:00", close: "24:00" }] } },
-      staff: [{ name: "أبو فهد", phoneEnc: enc("+966501234567"), phoneHint: "67" }],
+      staff: [{ name: "أبو فهد", phone: "+966501234567" }],
     });
     expect(c.businessHours.days.mon).toBeUndefined();
     expect(c.staff[0]?.notify).toBe(true);
+  });
+});
+
+describe("maskPhone", () => {
+  it("keeps only the last 4 digits", () => {
+    expect(maskPhone("+966501234567")).toBe("•••••••••4567");
+    expect(maskPhone("+966501234567")).not.toContain("50123");
   });
 });
 

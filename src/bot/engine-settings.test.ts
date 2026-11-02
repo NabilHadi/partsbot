@@ -175,3 +175,22 @@ describe("language", () => {
     expect(r.replies[0]).toMatch(/[\u0600-\u06FF]/);
   });
 });
+
+describe("staff numbers stay private", () => {
+  it("are never sent to the OneEPC gateway nor shown to the customer", async () => {
+    const STAFF = "+966551239876";
+    const sent: string[] = [];
+    const inner = mock.client;
+    const spy = {
+      async decode(vin: string) { sent.push(JSON.stringify(vin)); return inner.decode(vin); },
+      async searchParts(id: Parameters<typeof inner.searchParts>[0], p: Parameters<typeof inner.searchParts>[1]) { sent.push(JSON.stringify([id, p])); return inner.searchParts(id, p); },
+    };
+    const c = new Conversation(spy, { staff: [{ name: "أبو فهد", phone: STAFF }], staffHandoffName: "أبو فهد" });
+    c.extras = { stock: createStockLookup(new InMemoryStockSource(PADS), "shop_1", false), allowSyntheticStock: false };
+    const r1 = await c.say(ASK);
+    const r2 = await c.say("ابي اكلم موظف");
+    expect(sent.length).toBeGreaterThan(0);
+    for (const s of sent) expect(s).not.toMatch(/551239876|9876/);
+    for (const t of [...r1.replies, ...r2.replies]) expect(t).not.toContain("551239876");
+  });
+});

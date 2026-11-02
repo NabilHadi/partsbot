@@ -5,8 +5,7 @@
  * The stored config keeps ONLY the keys a shop set explicitly (defaults stay in code, so improving a default
  * reaches every shop that did not choose otherwise). Every change is validated with the full schema first.
  */
-import { encryptField, maskPhone, staffPhoneContext } from "../crypto/field-crypto.js";
-import { WEEKDAYS, normalizeWhatsAppNumber, parseShopConfig, shopConfigSchema, type ShopConfig, type Weekday } from "../bot/shop-config.js";
+import { WEEKDAYS, maskPhone, normalizeWhatsAppNumber, parseShopConfig, shopConfigSchema, type ShopConfig, type Weekday } from "../bot/shop-config.js";
 
 export type RawConfig = Record<string, unknown>;
 
@@ -17,7 +16,7 @@ export class AdminInputError extends Error {
   }
 }
 
-/** Top-level settings `set` may change. `staff` has its own commands (it encrypts); `businessHours` via `hours.<day>`. */
+/** Top-level settings `set` may change. `staff` has its own commands (they normalize numbers); `businessHours` via `hours.<day>`. */
 const SETTABLE = new Set(Object.keys(shopConfigSchema.shape).filter((k) => k !== "staff" && k !== "businessHours"));
 
 /** "08:00-12:00,16:00-23:00" -> windows; "closed" or "" -> []. */
@@ -83,7 +82,7 @@ export function applySet(raw: RawConfig, edits: Assignment[]): { raw: RawConfig;
       hours.days[day] = value;
       next.businessHours = hours;
     } else if (key === "staff") {
-      throw new AdminInputError("use staff-add / staff-remove for staff (numbers are encrypted)");
+      throw new AdminInputError("use staff-add / staff-remove for staff");
     } else if (!SETTABLE.has(key)) {
       throw new AdminInputError(`unknown setting "${key}"`);
     } else {
@@ -116,13 +115,13 @@ function validate(raw: RawConfig): ShopConfig {
   return r.data;
 }
 
-export function addStaff(raw: RawConfig, shopId: string, key: Buffer, member: { name: string; phone: string; notify?: boolean }): { raw: RawConfig; config: ShopConfig } {
+export function addStaff(raw: RawConfig, member: { name: string; phone: string; notify?: boolean }): { raw: RawConfig; config: ShopConfig } {
   const e164 = normalizeWhatsAppNumber(member.phone);
   if (!e164) throw new AdminInputError("phone is not a valid WhatsApp mobile number (e.g. 05XXXXXXXX or +9665XXXXXXXX)");
   const name = member.name.trim();
   const staff = [...((raw.staff as unknown[] | undefined) ?? [])] as { name: string }[];
   if (staff.some((s) => s.name === name)) throw new AdminInputError(`staff "${name}" already exists (staff-remove first)`);
-  staff.push({ name, phoneEnc: encryptField(e164, key, staffPhoneContext(shopId)), phoneHint: e164.slice(-2), notify: member.notify ?? true } as never);
+  staff.push({ name, phone: e164, notify: member.notify ?? true } as never);
   const next = { ...raw, staff };
   return { raw: next, config: validate(next) };
 }
@@ -134,7 +133,7 @@ export function removeStaff(raw: RawConfig, name: string): { raw: RawConfig; con
   return { raw: next, config: validate(next) };
 }
 
-/** The effective config for display: staff numbers masked, ciphertext omitted; `*` marks keys the shop set. */
+/** The effective config for display: staff numbers masked (last 4 digits); `*` marks keys the shop set. */
 export function renderConfig(raw: RawConfig, config: ShopConfig): string[] {
   const out: string[] = [];
   const explicit = (k: string) => (k in (raw ?? {}) ? "*" : " ");
@@ -148,7 +147,7 @@ export function renderConfig(raw: RawConfig, config: ShopConfig): string[] {
     out.push(`    ${d}  ${w.length ? w.map((x) => `${x.open}-${x.close}${x.close <= x.open ? " (+1 day)" : ""}`).join(", ") : "closed"}`);
   }
   out.push(`${explicit("staff")} staff (${config.staff.length})`);
-  for (const s of config.staff) out.push(`    ${s.name}  ${maskPhone(s.phoneHint)}${s.notify ? "" : "  (no notifications)"}`);
+  for (const s of config.staff) out.push(`    ${s.name}  ${maskPhone(s.phone)}${s.notify ? "" : "  (no notifications)"}`);
   out.push("(* = set for this shop; others are defaults)");
   return out;
 }
