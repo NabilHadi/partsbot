@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     AI_PROVIDER: "gemini",
     AI_MODEL: process.env.AI_MODEL?.trim() || "gemini-3.8-flash",
     AI_FALLBACK_MODEL: process.env.AI_FALLBACK_MODEL?.trim() || null,
-    AI_TIMEOUT_MS: Number(process.env.AI_TIMEOUT_MS ?? 12000),
+    AI_TIMEOUT_MS: Number(process.env.AI_TIMEOUT_MS ?? 25000),
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   });
   if (!setup.enabled) {

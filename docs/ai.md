@@ -28,7 +28,7 @@ Scope: shop customer service only (parts, stock, prices, VIN, staff handoff). Of
 - **Shop**: `aiEnabled` in the shop config (admin settings or `npm run shop -- set <id> aiEnabled=true`).
   - Default: off.
   - `shop create --test` turns it on for test shops.
-- `AI_MODEL` (default `gemini-3.8-flash`), `AI_FALLBACK_MODEL` (used for the one retry), `AI_TIMEOUT_MS` (default 12000 per attempt).
+- `AI_MODEL` (default `gemini-3.8-flash`), `AI_FALLBACK_MODEL` (used for the one retry), `AI_TIMEOUT_MS` (default 25000 per attempt).
 - The provider sits behind `AiProvider` (`provider.ts`); today Gemini REST (`gemini.ts`) is the only implementation.
 - `/admin/app` shows AI on/off, the model, the fallback model and a `models.get` key check. That check does **not** consume or detect the daily generate quota.
 

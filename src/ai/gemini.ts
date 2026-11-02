@@ -39,7 +39,7 @@ export class GeminiProvider implements AiProvider {
     this.key = o.apiKey;
     this.model = o.model;
     this.fallbackModel = o.fallbackModel ?? null;
-    this.timeoutMs = o.timeoutMs ?? 12000;
+    this.timeoutMs = o.timeoutMs ?? 25000;
     this.base = (o.baseUrl ?? DEFAULT_BASE).replace(/\/$/, "");
     this.thinkingLevel = o.thinkingLevel === undefined ? "low" : o.thinkingLevel;
     this.fetchImpl = o.fetchImpl ?? fetch;
