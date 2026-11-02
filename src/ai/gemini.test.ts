@@ -24,7 +24,7 @@ describe("GeminiProvider", () => {
     const p = new GeminiProvider({ apiKey: KEY, model: "gemini-3.8-flash", fetchImpl: f });
     const r = await p.generateJson({ ...req, temperature: 0.1 });
     expect(r.data).toEqual({ a: 1 });
-    expect(r.usage).toEqual({ inputTokens: 50, outputTokens: 15 });
+    expect(r.usage).toEqual({ inputTokens: 50, outputTokens: 15, cachedInputTokens: 0 });
     expect(r.attempts).toBe(1);
     expect(calls[0]!.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent");
     expect(calls[0]!.url).not.toContain(KEY);
@@ -79,5 +79,15 @@ describe("GeminiProvider", () => {
     expect((await mk(404).check()).detail).toContain("not found");
     const down = new GeminiProvider({ apiKey: KEY, model: "m", fetchImpl: (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch });
     expect(await down.check()).toEqual({ ok: false, detail: "unreachable" });
+  });
+});
+
+describe("Gemini daily quota", () => {
+  it("maps a per-day RESOURCE_EXHAUSTED 429 to quota (not retried on the same model)", async () => {
+    const q = () => new Response(JSON.stringify({ error: { code: 429, status: "RESOURCE_EXHAUSTED", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } }), { status: 429 });
+    const { f, calls } = fakeFetch([q, q]);
+    const e = await new GeminiProvider({ apiKey: KEY, model: "gemini-3.8-flash", fetchImpl: f }).generateJson(req).catch((x: unknown) => x);
+    expect((e as AiError).reason).toBe("quota");
+    expect(calls).toHaveLength(1);
   });
 });

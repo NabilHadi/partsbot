@@ -226,6 +226,21 @@ describe("processInboundJob: AI layer", () => {
     expect(on.recorded).toEqual([expect.objectContaining({ term: "كرتون الدهن", canonicalAr: "فلتر زيت" })]);
   });
 
+  it("a shop's aiProvider picks that provider; one without a key falls back to the server default", async () => {
+    const def = await aiDeps();
+    const other = await aiDeps();
+    const a = setup({ dryRun: true, shopConfig: { aiEnabled: true, aiProvider: "deepseek" } });
+    await processInboundJob(job("p1", "ابي كرتون الدهن"), { ...a.deps, ...def.extra, aiByProvider: { deepseek: other.extra.ai } });
+    expect(def.provider.calls).toHaveLength(0);
+    expect(other.provider.calls.length).toBeGreaterThan(0);
+
+    const def2 = await aiDeps();
+    const b = setup({ dryRun: true, shopConfig: { aiEnabled: true, aiProvider: "deepseek" } });
+    await processInboundJob(job("p2", "ابي كرتون الدهن"), { ...b.deps, ...def2.extra, aiByProvider: {} });
+    expect(def2.provider.calls.length).toBeGreaterThan(0);
+    expect(b.logs.some((l) => l.event === "alert" && l.fields.code === "ai_provider_unavailable")).toBe(true);
+  });
+
   it("ai_call logs carry model, tokens, latency, cost and outcome, never the prompt, message or reply", async () => {
     const on = await aiDeps();
     const { deps, logs } = setup({ dryRun: true, shopConfig: { aiEnabled: true } });

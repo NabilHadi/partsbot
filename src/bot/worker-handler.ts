@@ -36,6 +36,8 @@ export interface WorkerHandlerDeps {
   allowSyntheticStockEnv?: boolean;
   /** Server-wide AI (AI_ENABLED + key). Used only for shops with `aiEnabled`. Absent = rules only. */
   ai?: EngineAi;
+  /** AI per provider name (only providers with a key); a shop's `aiProvider` setting picks one, else `ai`. */
+  aiByProvider?: Record<string, EngineAi>;
   /** The synonym list (cached). A load failure = no synonyms this turn + an alert. */
   synonyms?: () => Promise<SynonymIndex>;
   /** Store the AI's unknown mappings as pending suggestions (best effort). */
@@ -114,7 +116,15 @@ export async function processInboundJob(job: InboundMessageJob, deps: WorkerHand
         log("alert", { ...ids, severity: "warning", code: "synonyms_load_failed", detail: `error=${(err as Error)?.name ?? "unknown"}` });
       }
     }
-    const ai = deps.ai && shopConfig.aiEnabled ? deps.ai : undefined;
+    let ai: EngineAi | undefined;
+    if (deps.ai && shopConfig.aiEnabled) {
+      ai = deps.ai;
+      if (shopConfig.aiProvider !== "server_default") {
+        const chosen = deps.aiByProvider?.[shopConfig.aiProvider];
+        if (chosen) ai = chosen;
+        else log("alert", { ...ids, severity: "warning", code: "ai_provider_unavailable", detail: `provider=${shopConfig.aiProvider} (no key): server default used` });
+      }
+    }
     const result = await handleInbound(state, job.text, {
       oneepc, now, shop: shopConfig, botMessagesToday, stock, allowSyntheticStock: allowSynthetic,
       ...(ai ? { ai } : {}), ...(synonyms ? { synonyms } : {}),
@@ -179,8 +189,8 @@ function logActions(log: NonNullable<WorkerHandlerDeps["log"]>, ids: LogFields, 
         // Metrics only: never the prompt, the customer's message or the reply.
         log("ai_call", {
           ...ids, stage: a.stage, ok: a.ok, reason: a.reason, model: a.model, latencyMs: a.latencyMs,
-          inputTokens: a.inputTokens, outputTokens: a.outputTokens,
-          costUsd: ((c) => (c === null ? null : Number(c.toFixed(6))))(costUsd(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens })),
+          inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0,
+          costUsd: ((c) => (c === null ? null : Number(c.toFixed(6))))(costUsd(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0 }, new Date())),
           intent: a.intent, parts: a.parts, validator: a.validator,
         });
         break;

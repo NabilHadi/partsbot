@@ -57,20 +57,37 @@ describe("/admin auth", () => {
     expect(p2.body).toContain("REJECTED by OneEPC");
   });
 
-  it("app page shows AI status and model, never the key", async () => {
+  it("app page shows AI providers, models and recent-call health, never a key", async () => {
     const f = fakeDb();
-    const KEY = "AIzaSy-THIS-MUST-NEVER-SHOW";
-    const ai = { enabled: true, reason: null, provider: "gemini", model: "gemini-3.8-flash", fallbackModel: "gemini-2.5-flash", keyConfigured: true };
-    const a = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, ai }, aiCheck: async () => ({ ok: true, detail: "model available, key accepted" }) } });
+    const KEY = "sk-THIS-MUST-NEVER-SHOW";
+    const ai = {
+      enabled: true, reason: null, defaultProvider: "gemini",
+      chains: [
+        { provider: "gemini", model: "gemini-3.1-flash-lite", fallbackProvider: null, fallbackModel: "gemini-3.5-flash-lite", keyConfigured: true },
+        { provider: "deepseek", model: "deepseek-flash", fallbackProvider: "gemini", fallbackModel: "gemini-3.1-flash-lite", keyConfigured: true },
+      ],
+    };
+    const at = new Date("2026-11-02T10:00:00Z");
+    const aiHealth = async () => ({
+      windowHours: 24, lastThreeFailed: false,
+      calls: { calls: 10, ok: 7, answeredByRetry: 2, lastCallAt: at, lastFinalOk: true, lastErrorAt: at, lastErrorReason: "quota" },
+      models: [{ provider: "deepseek", model: "deepseek-flash", attempts: 12, ok: 5, avgLatencyMs: 1500, p90LatencyMs: 3000, lastOkAt: at, lastErrorAt: at, lastErrorReason: "timeout" }],
+    });
+    const a = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, ai }, aiHealth, aiCheck: async () => ({ ok: true, detail: "model available, key accepted" }) } });
     const { page } = await loggedIn(a);
     expect(page.body).toContain("<strong>ON</strong>");
-    expect(page.body).toContain("<strong>OK</strong>");
-    expect(page.body).toContain("gemini-3.8-flash");
-    expect(page.body).toContain("gemini-2.5-flash");
+    expect(page.body).toContain("<strong>DEGRADED</strong>");
+    expect(page.body).toContain("7/10 calls answered");
+    expect(page.body).toContain("<strong>quota</strong>");
+    expect(page.body).toContain("<strong>timeout</strong>");
+    expect(page.body).toContain("deepseek-flash");
+    expect(page.body).toContain("gemini-3.5-flash-lite");
+    expect(page.body).toContain("retry on gemini");
     expect(page.body).not.toContain(KEY);
-    const b = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, ai: { ...ai, enabled: false, reason: "no_key", keyConfigured: false } } } });
+    const b = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, ai: { ...ai, enabled: false, reason: "no_key", chains: [{ ...ai.chains[0]!, keyConfigured: false }] } }, aiHealth: async () => { throw new Error("no table"); } } });
     const { page: p2 } = await loggedIn(b);
     expect(p2.body).toContain("no API key is configured");
+    expect(p2.body).toContain("no call log");
   });
 
   it("synonym changes need a session and a CSRF token", async () => {

@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** Optional string: blank = null. */
+const OPT_STR = z.string().optional().transform((v) => (v && v.trim() ? v.trim() : null));
+
 const envSchema = z
   .object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -40,15 +43,32 @@ const envSchema = z
     .string()
     .optional()
     .transform((v) => (v ?? "").trim().toLowerCase() === "true"),
-  AI_PROVIDER: z.enum(["gemini"]).default("gemini"),
-  /** Model id as listed by the provider's models.list (checked at startup by /admin/app). */
-  AI_MODEL: z.string().min(1).default("gemini-3.8-flash"),
-  /** Optional model used for the single retry (e.g. when the main model is overloaded). Empty = retry the same model. */
-  AI_FALLBACK_MODEL: z.string().optional().transform((v) => (v && v.trim() ? v.trim() : null)),
+  /** Server-default provider. A shop can override it with its `aiProvider` setting (e.g. the test shop on DeepSeek). */
+  AI_PROVIDER: z.enum(["gemini", "deepseek"]).default("gemini"),
+  /**
+   * Optional cross-provider retry: when set and different from the provider in use, the ONE retry goes to this
+   * provider's main model (e.g. DeepSeek first, Gemini Flash-Lite on retry). Unset = retry within the same provider.
+   */
+  AI_FALLBACK_PROVIDER: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() ? v.trim() : null))
+    .pipe(z.enum(["gemini", "deepseek"]).nullable()),
   /** Per model call; one retry. */
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(25000),
+  /** Gemini model ids as listed by models.list. GEMINI_FALLBACK_MODEL = model for the same-provider retry. */
+  GEMINI_MODEL: z.string().min(1).default("gemini-3.8-flash"),
+  GEMINI_FALLBACK_MODEL: OPT_STR,
   /** Never logged or shown; /admin/app only says configured yes/no. */
   GEMINI_API_KEY: z.string().min(1).optional(),
+  /** DeepSeek (OpenAI-compatible). Model ids as listed by GET /models; deepseek-flash = DeepSeek-V4.1-Flash. */
+  DEEPSEEK_MODEL: z.string().min(1).default("deepseek-flash"),
+  DEEPSEEK_FALLBACK_MODEL: OPT_STR,
+  /** disabled (default: fastest, temperature honoured) | low | high (thinking mode effort). */
+  DEEPSEEK_THINKING: z.enum(["disabled", "low", "high"]).default("disabled"),
+  DEEPSEEK_BASE_URL: z.string().url().default("https://api.deepseek.com"),
+  /** Never logged or shown. */
+  DEEPSEEK_API_KEY: z.string().min(1).optional(),
   })
   .superRefine((env, ctx) => {
     if (env.ONEEPC_DECODE_SOURCE !== env.ONEEPC_SEARCH_SOURCE) {
@@ -68,7 +88,11 @@ export type Config = z.infer<typeof envSchema>;
 
 /** Parse and validate environment variables. Throws a readable error if invalid. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = envSchema.safeParse(env);
+  // Legacy names (before DeepSeek): AI_MODEL / AI_FALLBACK_MODEL were the Gemini models.
+  const e = { ...env };
+  if (!e.GEMINI_MODEL && e.AI_MODEL) e.GEMINI_MODEL = e.AI_MODEL;
+  if (!e.GEMINI_FALLBACK_MODEL && e.AI_FALLBACK_MODEL) e.GEMINI_FALLBACK_MODEL = e.AI_FALLBACK_MODEL;
+  const parsed = envSchema.safeParse(e);
   if (!parsed.success) {
     const problems = parsed.error.issues
       .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)

@@ -1,6 +1,8 @@
 /**
  * Offline eval of the AI layer against the REAL model (costs a few cents). Run: npm run eval-ai
- *   Needs GEMINI_API_KEY in the environment (never printed). AI_MODEL / AI_FALLBACK_MODEL / AI_TIMEOUT_MS as in the app.
+ *   Same AI settings as the app (never printed): AI_PROVIDER=gemini|deepseek, AI_FALLBACK_PROVIDER, GEMINI_MODEL / GEMINI_FALLBACK_MODEL,
+ *   DEEPSEEK_MODEL / DEEPSEEK_FALLBACK_MODEL / DEEPSEEK_THINKING, AI_TIMEOUT_MS, and the provider's API key.
+ *   Cost is printed at the peak price and, for providers with an off-peak discount (DeepSeek), off-peak too.
  *   EVAL_ONLY=slang,typos to run some categories, EVAL_IDS=pipe-02 for single cases, EVAL_CONCURRENCY (default 4), EVAL_DELAY_MS (pause between calls),
  *   EVAL_OUT=path.json for the raw results.
  * Understand cases call stage 1 directly; "pipeline" cases run the whole engine (AI + synonyms + mock OneEPC + compose)
@@ -11,7 +13,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAiFromConfig, engineAi } from "../ai/index.js";
-import { costUsd, type AiProvider } from "../ai/provider.js";
+import { costUsd, type AiProvider, type AiUsage } from "../ai/provider.js";
+import { loadConfig } from "../config.js";
 import { SYNONYM_SEED } from "../ai/synonym-seed.js";
 import { SynonymIndex } from "../ai/synonyms.js";
 import { understandMessage, type HistoryTurn, type Understanding } from "../ai/understand.js";
@@ -26,7 +29,11 @@ interface Case {
   intent?: string[]; vin?: string; parts?: ExpPart[]; noNumbers?: boolean;
   pipeline?: boolean; expectNumbers?: string[];
 }
-interface Outcome { id: string; cat: string; pass: boolean; why: string[]; latencyMs: number; costUsd: number; calls: number; model: string; fallbackUsed?: boolean }
+interface Outcome { id: string; cat: string; pass: boolean; why: string[]; latencyMs: number; costUsd: number; costOffPeakUsd: number; calls: number; model: string; fallbackUsed?: boolean }
+
+/** A Sunday noon UTC: off-peak for every provider that has off-peak prices. */
+const OFF_PEAK = new Date("2026-11-01T12:00:00Z");
+const cost2 = (model: string, u: AiUsage) => ({ peak: costUsd(model, u) ?? 0, off: costUsd(model, u, OFF_PEAK) ?? 0 });
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fx = JSON.parse(readFileSync(join(here, "../ai/eval/fixtures.json"), "utf8")) as { groups: Record<string, string[]>; cases: Case[] };
@@ -64,8 +71,8 @@ async function runUnderstand(provider: AiProvider, c: Case): Promise<Outcome> {
   const r = await understandMessage(provider, {
     text: c.text, history, vehicle: c.ctx?.vehicle ?? null, language: "auto", waitingFor: c.ctx?.waitingFor ?? null, lastPart: c.ctx?.lastPart ?? null,
   });
-  const cost = costUsd(r.model, r.usage) ?? 0;
-  const base = { id: c.id, cat: c.cat, latencyMs: r.latencyMs, costUsd: cost, calls: 1, model: r.model, fallbackUsed: r.model !== provider.model };
+  const cost = cost2(r.model, r.usage);
+  const base = { id: c.id, cat: c.cat, latencyMs: r.latencyMs, costUsd: cost.peak, costOffPeakUsd: cost.off, calls: 1, model: r.model, fallbackUsed: r.model !== provider.model };
   if (!r.ok) {
     // Refusing to invent a number is the right outcome for an injection that asks for one.
     const fine = r.reason === "invented_part_number" && c.noNumbers;
@@ -89,9 +96,12 @@ async function runPipeline(provider: AiProvider, c: Case, mockClient: Awaited<Re
   for (const a of calls) if (!a.ok && a.stage === "understand") why.push(`understand failed: ${a.reason}`);
   const compose = calls.find((a) => a.stage === "compose");
   const latencyMs = calls.reduce((s, a) => s + a.latencyMs, 0);
-  const cost = calls.reduce((s, a) => s + (costUsd(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens }) ?? 0), 0);
+  const costs = calls.map((a) => cost2(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0 }));
+  const cost = costs.reduce((s, x) => s + x.peak, 0);
+  const costOff = costs.reduce((s, x) => s + x.off, 0);
   return {
-    id: c.id, cat: c.cat, pass: why.length === 0, why, latencyMs, costUsd: cost, calls: calls.length, model: calls[0]?.model ?? provider.model,
+    id: c.id, cat: c.cat, pass: why.length === 0, why, latencyMs, costUsd: cost, costOffPeakUsd: costOff, calls: calls.length, model: calls[0]?.model ?? provider.model,
+    fallbackUsed: calls.some((a) => a.model !== provider.model),
     composeOk: compose ? compose.ok : null, validator: compose ? (compose.validator ?? compose.reason ?? null) : null,
     // Fixture text + mock catalogue only (no customer data): kept so failures can be read in EVAL_OUT.
     ...(why.length ? { reply, oneEpcCalls: rec.calls } : {}),
@@ -116,21 +126,15 @@ const DELAY_MS = Number(process.env.EVAL_DELAY_MS ?? 0);
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "-");
 
 async function main(): Promise<void> {
-  const setup = createAiFromConfig({
-    AI_ENABLED: true,
-    AI_PROVIDER: "gemini",
-    AI_MODEL: process.env.AI_MODEL?.trim() || "gemini-3.8-flash",
-    AI_FALLBACK_MODEL: process.env.AI_FALLBACK_MODEL?.trim() || null,
-    AI_TIMEOUT_MS: Number(process.env.AI_TIMEOUT_MS ?? 25000),
-    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-  });
+  const config = loadConfig({ DATABASE_URL: "postgres://unused/eval", ...process.env, AI_ENABLED: "true" });
+  const setup = createAiFromConfig(config);
   if (!setup.enabled) {
-    console.error(`eval-ai: AI not available (${setup.reason}). Set GEMINI_API_KEY.`);
+    console.error(`eval-ai: AI not available (${setup.reason}). Set the API key for AI_PROVIDER=${config.AI_PROVIDER}.`);
     process.exit(2);
   }
   const provider = setup.provider;
   const check = await provider.check();
-  console.log(`model ${provider.model}${provider.fallbackModel ? ` (fallback ${provider.fallbackModel})` : ""}: ${check.ok ? "OK" : "FAILED"} ${check.detail}`);
+  console.log(`provider ${provider.name}, model ${provider.model}${provider.fallbackModel ? ` (retry on ${provider.fallbackProvider ?? provider.name} ${provider.fallbackModel})` : ""}: ${check.ok ? "OK" : "FAILED"} ${check.detail}`);
   if (!check.ok) process.exit(2);
 
   const only = process.env.EVAL_ONLY?.split(",").map((s) => s.trim()).filter(Boolean);
@@ -142,7 +146,7 @@ async function main(): Promise<void> {
   try {
     const results = await pool(cases, Number(process.env.EVAL_CONCURRENCY ?? 4), (c) =>
       (c.pipeline ? runPipeline(provider, c, mock.client, synonyms) : runUnderstand(provider, c)).catch(
-        (err: unknown): Outcome => ({ id: c.id, cat: c.cat, pass: false, why: [`crash: ${(err as Error)?.name}`], latencyMs: 0, costUsd: 0, calls: 0, model: provider.model }),
+        (err: unknown): Outcome => ({ id: c.id, cat: c.cat, pass: false, why: [`crash: ${(err as Error)?.name}`], latencyMs: 0, costUsd: 0, costOffPeakUsd: 0, calls: 0, model: provider.model }),
       ),
     );
 
@@ -161,15 +165,19 @@ async function main(): Promise<void> {
     const pipe = results.filter((r) => "composeOk" in r) as Array<Outcome & { composeOk: boolean | null; validator: string | null }>;
     const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
     const sorted = und.map((r) => r.latencyMs).sort((a, b) => a - b);
-    console.log(`\nunderstand call: avg ${Math.round(avg(sorted))} ms, p50 ${sorted[Math.floor(sorted.length / 2)] ?? 0} ms, p90 ${sorted[Math.floor(sorted.length * 0.9)] ?? 0} ms, max ${sorted.at(-1) ?? 0} ms; avg cost $${avg(und.map((r) => r.costUsd)).toFixed(6)}`);
+    const offTxt = (rs: Outcome[]) => (rs.some((r) => r.costOffPeakUsd !== r.costUsd) ? ` (off-peak $${avg(rs.map((r) => r.costOffPeakUsd)).toFixed(6)})` : "");
+    console.log(`\nunderstand call: avg ${Math.round(avg(sorted))} ms, p50 ${sorted[Math.floor(sorted.length / 2)] ?? 0} ms, p90 ${sorted[Math.floor(sorted.length * 0.9)] ?? 0} ms, max ${sorted.at(-1) ?? 0} ms; avg cost $${avg(und.map((r) => r.costUsd)).toFixed(6)}${offTxt(und)}`);
     if (pipe.length) {
-      console.log(`full message (understand + compose): avg ${Math.round(avg(pipe.map((r) => r.latencyMs)))} ms, avg cost $${avg(pipe.map((r) => r.costUsd)).toFixed(6)}, avg ${avg(pipe.map((r) => r.calls)).toFixed(1)} calls`);
+      const ps = pipe.map((r) => r.latencyMs).sort((a, b) => a - b);
+      console.log(`full message (understand + compose): avg ${Math.round(avg(ps))} ms, p50 ${ps[Math.floor(ps.length / 2)] ?? 0} ms, p90 ${ps[Math.floor(ps.length * 0.9)] ?? 0} ms, avg cost $${avg(pipe.map((r) => r.costUsd)).toFixed(6)}${offTxt(pipe)}, avg ${avg(pipe.map((r) => r.calls)).toFixed(1)} calls`);
       const composed = pipe.filter((r) => r.composeOk !== null);
       console.log(`compose: ${composed.filter((r) => r.composeOk).length}/${composed.length} accepted by the validator; rejections: ${composed.filter((r) => !r.composeOk).map((r) => r.validator).join(", ") || "none"}`);
     }
     const fb = results.filter((r) => r.fallbackUsed).length;
     if (fb) console.log(`fallback model answered ${fb} case(s)`);
-    console.log(`total cost $${results.reduce((s, r) => s + r.costUsd, 0).toFixed(4)}, wall ${Math.round((Date.now() - started) / 1000)} s`);
+    const all = results.map((r) => r.latencyMs).sort((a, b) => a - b);
+    console.log(`all cases: p50 ${all[Math.floor(all.length / 2)] ?? 0} ms, p90 ${all[Math.floor(all.length * 0.9)] ?? 0} ms`);
+    console.log(`total cost $${results.reduce((s, r) => s + r.costUsd, 0).toFixed(4)} at peak price (off-peak $${results.reduce((s, r) => s + r.costOffPeakUsd, 0).toFixed(4)}), wall ${Math.round((Date.now() - started) / 1000)} s`);
 
     const fails = results.filter((r) => !r.pass);
     if (fails.length) {

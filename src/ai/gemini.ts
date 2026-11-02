@@ -4,7 +4,7 @@
  * The key goes in the x-goog-api-key header (never in the URL, so it cannot end up in an access log).
  * Timeout per attempt, ONE retry on transient failures (optionally on AI_FALLBACK_MODEL).
  */
-import { AiError, type AiProvider, type AiUsage, type JsonRequest, type JsonResult } from "./provider.js";
+import { AiError, ChainProvider, type AiBackend, type AiProvider, type AiUsage, type AttemptObserver, type JsonRequest, type JsonResult } from "./provider.js";
 
 export interface GeminiOptions {
   apiKey: string;
@@ -15,57 +15,36 @@ export interface GeminiOptions {
   /** "low" keeps chat latency down; Gemini 3.8 Flash does not accept "minimal". */
   thinkingLevel?: "low" | "medium" | "high" | null;
   fetchImpl?: typeof fetch;
+  observer?: AttemptObserver;
 }
 
 const DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-interface GeminiResponse {
+interface GeminiError {
+  error?: { status?: string; details?: { "@type"?: string; violations?: { quotaId?: string }[] }[] };
+}
+
+interface GeminiResponse extends GeminiError {
   candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
   promptFeedback?: { blockReason?: string };
   usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number };
 }
 
-export class GeminiProvider implements AiProvider {
+/** Gemini as a single-attempt backend (used directly in cross-provider chains). */
+export class GeminiBackend implements AiBackend {
   readonly name = "gemini";
-  readonly model: string;
-  readonly fallbackModel: string | null;
   private readonly key: string;
   private readonly timeoutMs: number;
   private readonly base: string;
   private readonly thinkingLevel: GeminiOptions["thinkingLevel"];
   private readonly fetchImpl: typeof fetch;
 
-  constructor(o: GeminiOptions) {
+  constructor(o: Omit<GeminiOptions, "model" | "fallbackModel" | "observer">) {
     this.key = o.apiKey;
-    this.model = o.model;
-    this.fallbackModel = o.fallbackModel ?? null;
     this.timeoutMs = o.timeoutMs ?? 25000;
     this.base = (o.baseUrl ?? DEFAULT_BASE).replace(/\/$/, "");
     this.thinkingLevel = o.thinkingLevel === undefined ? "low" : o.thinkingLevel;
     this.fetchImpl = o.fetchImpl ?? fetch;
-  }
-
-  async generateJson(req: JsonRequest): Promise<JsonResult> {
-    const started = Date.now();
-    const total: AiUsage = { inputTokens: 0, outputTokens: 0 };
-    let lastErr: AiError | null = null;
-    const models = [this.model, this.fallbackModel ?? this.model];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const model = models[attempt]!;
-      try {
-        const r = await this.once(model, req);
-        total.inputTokens += r.usage.inputTokens;
-        total.outputTokens += r.usage.outputTokens;
-        return { data: r.data, usage: total, latencyMs: Date.now() - started, model, attempts: attempt + 1 };
-      } catch (err) {
-        const e = err instanceof AiError ? err : new AiError("network", (err as Error)?.name ?? "unknown");
-        total.inputTokens += e.usage.inputTokens;
-        total.outputTokens += e.usage.outputTokens;
-        lastErr = e;
-        if (!e.retryable) break;
-      }
-    }
-    throw new AiError(lastErr!.reason, lastErr!.detail, total, Date.now() - started);
   }
 
   private thinkingConfig(model: string): Record<string, unknown> | undefined {
@@ -75,7 +54,7 @@ export class GeminiProvider implements AiProvider {
     return { thinkingLevel: this.thinkingLevel };
   }
 
-  private async once(model: string, req: JsonRequest): Promise<{ data: unknown; usage: AiUsage }> {
+  async attempt(model: string, req: JsonRequest): Promise<{ data: unknown; usage: AiUsage }> {
     const body = {
       systemInstruction: { parts: [{ text: req.system }] },
       contents: [{ role: "user", parts: [{ text: req.user }] }],
@@ -112,8 +91,8 @@ export class GeminiProvider implements AiProvider {
     }
     clearTimeout(timer);
     if (!res.ok) {
-      // Only the status: the error body can echo request details.
-      const reason = res.status === 429 ? "rate_limited" : res.status === 503 ? "overloaded" : res.status === 401 || res.status === 403 ? "auth" : "http_error";
+      // Only the status (+ the quota kind): the error body can echo request details.
+      const reason = res.status === 429 ? (isDailyQuota(json) ? "quota" : "rate_limited") : res.status === 503 ? "overloaded" : res.status === 401 || res.status === 403 ? "auth" : "http_error";
       throw new AiError(reason, `status=${res.status}`);
     }
     const um = json.usageMetadata ?? {};
@@ -132,11 +111,11 @@ export class GeminiProvider implements AiProvider {
     }
   }
 
-  async check(): Promise<{ ok: boolean; detail: string }> {
+  async checkModel(model: string): Promise<{ ok: boolean; detail: string }> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
-      const res = await this.fetchImpl(`${this.base}/models/${encodeURIComponent(this.model)}`, {
+      const res = await this.fetchImpl(`${this.base}/models/${encodeURIComponent(model)}`, {
         headers: { "x-goog-api-key": this.key },
         signal: ctrl.signal,
       });
@@ -149,5 +128,36 @@ export class GeminiProvider implements AiProvider {
     } finally {
       clearTimeout(timer);
     }
+  }
+}
+
+/** 429 because a per-DAY quota is used up (free tier: 20 requests/day/model), not a short burst limit. */
+function isDailyQuota(json: GeminiError): boolean {
+  if (json?.error?.status !== "RESOURCE_EXHAUSTED") return false;
+  return (json.error.details ?? []).some((d) => (d.violations ?? []).some((v) => /PerDay/i.test(v.quotaId ?? "")));
+}
+
+/** Gemini on its own: the main model, ONE retry on AI_FALLBACK_MODEL (or the same model). */
+export class GeminiProvider implements AiProvider {
+  readonly name = "gemini";
+  readonly model: string;
+  readonly fallbackModel: string | null;
+  readonly fallbackProvider = null;
+  readonly backend: GeminiBackend;
+  private readonly chain: ChainProvider;
+
+  constructor(o: GeminiOptions) {
+    this.model = o.model;
+    this.fallbackModel = o.fallbackModel ?? null;
+    this.backend = new GeminiBackend(o);
+    this.chain = new ChainProvider([{ backend: this.backend, model: o.model }, { backend: this.backend, model: o.fallbackModel ?? o.model }], o.observer);
+  }
+
+  generateJson(req: JsonRequest): Promise<JsonResult> {
+    return this.chain.generateJson(req);
+  }
+
+  check(): Promise<{ ok: boolean; detail: string }> {
+    return this.backend.checkModel(this.model);
   }
 }

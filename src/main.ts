@@ -69,10 +69,8 @@ const app = buildServer({
       ai: {
         enabled: aiSetup.enabled,
         reason: aiSetup.enabled ? null : aiSetup.reason,
-        provider: config.AI_PROVIDER,
-        model: config.AI_MODEL,
-        fallbackModel: config.AI_FALLBACK_MODEL,
-        keyConfigured: !!config.GEMINI_API_KEY,
+        defaultProvider: config.AI_PROVIDER,
+        chains: aiSetup.chains,
       },
     },
   },

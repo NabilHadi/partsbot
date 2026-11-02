@@ -3,6 +3,7 @@
  * Single admin user (ADMIN_PASSWORD); without it every /admin URL answers 503 (fail closed).
  * See src/admin/auth.ts for the session / CSRF / rate-limit design and docs/admin-ui.md for the routes.
  */
+import { healthState, readAiHealth, type AiHealth, type AiHealthState } from "../ai/attempt-repo.js";
 import type { OneEpcCheck } from "../oneepc/routing.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -37,7 +38,14 @@ export interface AppStatusInfo {
   commit: string;
   queueName: string;
   /** AI layer (never the key itself). Absent = the row says "not wired". */
-  ai?: { enabled: boolean; reason: string | null; provider: string; model: string; fallbackModel: string | null; keyConfigured: boolean };
+  ai?: {
+    enabled: boolean;
+    reason: string | null;
+    /** AI_PROVIDER (server default). */
+    defaultProvider: string;
+    /** One per provider; the default first. fallback* = where the one retry goes. */
+    chains: { provider: string; model: string; fallbackProvider: string | null; fallbackModel: string | null; keyConfigured: boolean }[];
+  };
 }
 
 export interface AdminDeps {
@@ -56,6 +64,8 @@ export interface AdminDeps {
   maxUploadBytes?: number;
   /** Live AI check (is the model reachable with the key?). Never returns the key. */
   aiCheck?: () => Promise<{ ok: boolean; detail: string }>;
+  /** Recent real calls (default: table ai_attempts in deps.db). */
+  aiHealth?: () => Promise<AiHealth & { lastThreeFailed: boolean }>;
   /** Called after an admin edit of the synonym list (drops the server's cache). */
   onSynonymsChanged?: () => void;
 }
@@ -606,6 +616,46 @@ ${synonymsTable(req, rows)}`, flash, code);
     )}</tbody></table>`;
   }
 
+  async function aiStatusRows(a: NonNullable<AppStatusInfo["ai"]>): Promise<Raw> {
+    const when = (d: Date | null) => (d ? riyadhTime(d) : "never");
+    let health: Raw = html`<span class="muted">no call log</span>`;
+    let state: AiHealthState | null = null;
+    try {
+      const h = await (deps.aiHealth ?? (() => readAiHealth(deps.db)))();
+      state = healthState(h.calls, h.lastThreeFailed);
+      const c = h.calls;
+      const pct = (ok: number, n: number) => (n ? `${Math.round((ok / n) * 100)} %` : "–");
+      const models = h.models.map(
+        (m) => html`<li>${m.provider} <code>${m.model}</code>: ${m.ok}/${m.attempts} attempts OK (${pct(m.ok, m.attempts)})${m.avgLatencyMs !== null ? html`, avg ${(m.avgLatencyMs / 1000).toFixed(1)} s, p90 ${((m.p90LatencyMs ?? 0) / 1000).toFixed(1)} s` : ""}${m.lastErrorReason ? html` · last error <strong>${m.lastErrorReason}</strong> ${when(m.lastErrorAt)}` : ""}</li>`,
+      );
+      health = c.calls === 0
+        ? html`<strong>no calls in the last ${h.windowHours} h</strong>${c.lastErrorReason ? html` · last error <strong>${c.lastErrorReason}</strong> ${when(c.lastErrorAt)}` : ""}`
+        : html`<strong>${state}</strong> · ${c.ok}/${c.calls} calls answered in the last ${h.windowHours} h (${pct(c.ok, c.calls)})${c.answeredByRetry ? html`, ${c.answeredByRetry} by the retry` : ""} · last call ${when(c.lastCallAt)}${c.lastErrorReason ? html` · last error <strong>${c.lastErrorReason}</strong> ${when(c.lastErrorAt)}` : html` · no errors`}${models.length ? html`<ul>${models}</ul>` : ""}`;
+    } catch {
+      /* table missing (migrations not run) */
+    }
+    let keyCheck: Raw = html`<span class="muted">not checked</span>`;
+    if (a.enabled && deps.aiCheck) {
+      const c = await deps.aiCheck().catch(() => ({ ok: false, detail: "check failed" }));
+      keyCheck = html`${c.ok ? "OK" : html`<strong>FAILED</strong>`} <span class="hint">${c.detail}</span>`;
+    }
+    let overrides: Raw = html``;
+    try {
+      const r = await deps.db.query<{ name: string; p: string }>(
+        "SELECT name, config->>'aiProvider' AS p FROM shops WHERE config ? 'aiProvider' AND config->>'aiProvider' <> 'server_default' ORDER BY name");
+      if (r.rows.length) overrides = html`<tr><th>Shops on another AI provider</th><td>${r.rows.map((x, i) => html`${i ? ", " : ""}${x.name} (${x.p})`)}</td></tr>`;
+    } catch {
+      /* fake db in tests */
+    }
+    const chainRow = (c: (typeof a.chains)[number]) =>
+      html`<li>${c.provider === a.defaultProvider ? html`<strong>${c.provider}</strong> (default)` : c.provider} · <code>${c.model}</code>${c.fallbackModel ? html` · retry on ${c.fallbackProvider ? html`${c.fallbackProvider} ` : ""}<code>${c.fallbackModel}</code>` : ""} · API key configured: ${c.keyConfigured ? "yes" : "no"}</li>`;
+    return html`<tr><th>AI</th><td>${a.enabled ? html`<strong>ON</strong>` : html`off <span class="hint">${a.reason === "no_key" ? "AI_ENABLED is on but no API key is configured" : "AI_ENABLED=false"}: rules + templates only</span>`} <span class="hint">each shop also needs “AI assistant” switched on</span></td></tr>
+<tr><th>AI recent calls</th><td>${health} <span class="hint">from real bot calls (codes only, no text)</span></td></tr>
+<tr><th>AI providers and models</th><td><ul>${a.chains.map(chainRow)}</ul></td></tr>
+<tr><th>AI key check (default model)</th><td>${keyCheck} <span class="hint">says only whether the key and model are accepted, not whether calls succeed</span></td></tr>
+${overrides}`;
+  }
+
   // ---------- app status + audit ----------
   app.get("/admin/app", async (req, reply) => {
     const s = deps.status;
@@ -639,17 +689,7 @@ ${s.oneepcMockBaseUrl ? html`<tr><th>Mock OneEPC</th><td><code>${s.oneepcMockBas
       oneepcRows = html`<tr><th>OneEPC reachability</th><td>${await probe(s.oneepcBaseUrl)}</td></tr>`;
     }
     let aiRows: Raw = html`<tr><th>AI</th><td class="muted">not wired</td></tr>`;
-    if (s.ai) {
-      const a = s.ai;
-      let live: Raw = html`<span class="muted">not checked</span>`;
-      if (a.enabled && deps.aiCheck) {
-        const c = await deps.aiCheck().catch(() => ({ ok: false, detail: "check failed" }));
-        live = html`<strong>${c.ok ? "OK" : "FAILED"}</strong> <span class="hint">${c.detail}</span>`;
-      }
-      aiRows = html`<tr><th>AI</th><td>${a.enabled ? html`<strong>ON</strong> · ${live}` : html`off <span class="hint">${a.reason === "no_key" ? "AI_ENABLED is on but no API key is configured" : "AI_ENABLED=false"}: rules + templates only</span>`} <span class="hint">each shop also needs “AI assistant” switched on</span></td></tr>
-<tr><th>AI model</th><td>${a.provider} · <code>${a.model}</code>${a.fallbackModel ? html` · retry/fallback <code>${a.fallbackModel}</code>` : ""}</td></tr>
-<tr><th>AI API key configured</th><td>${yes(a.keyConfigured)}</td></tr>`;
-    }
+    if (s.ai) aiRows = await aiStatusRows(s.ai);
     return page(reply, req, "App status", html`<table><tbody>
 <tr><th>DRY_RUN</th><td>${s.dryRun ? "ON (the bot logs replies and sends nothing)" : "off (replies are sent)"} <span class="hint">as set in the server's environment; the worker is started with the same settings</span></td></tr>
 <tr><th>OneEPC base URL</th><td><code>${s.oneepcBaseUrl}</code></td></tr>

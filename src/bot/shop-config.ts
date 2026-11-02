@@ -117,6 +117,8 @@ export type StockDisplay = (typeof STOCK_DISPLAY)[number];
 export const AFTER_HOURS_MODES = ["reply_with_note", "note_only"] as const;
 export type AfterHoursMode = (typeof AFTER_HOURS_MODES)[number];
 
+export const AI_PROVIDER_CHOICES = ["server_default", "gemini", "deepseek"] as const;
+
 export const shopConfigSchema = z.strictObject({
   // ---- what the customer is shown ----
   /** Show the shop's price next to stock lines (src/inventory). Off = never a price. */
@@ -168,6 +170,8 @@ export const shopConfigSchema = z.strictObject({
   maxPartsPerReply: z.number().int().min(1).max(10).default(3),
   /** AI understanding + reply wording (src/ai). Needs the global AI_ENABLED too. Off for new shops. */
   aiEnabled: z.boolean().default(false),
+  /** Which AI provider this shop uses; server_default = AI_PROVIDER. A provider without a key on the server falls back to the default. */
+  aiProvider: z.enum(AI_PROVIDER_CHOICES).default("server_default"),
 });
 export type ShopConfig = z.infer<typeof shopConfigSchema>;
 

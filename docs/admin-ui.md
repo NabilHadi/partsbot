@@ -24,7 +24,7 @@ Server-rendered pages served by the main Fastify process (`dist/main.js`). There
 | `POST /admin/shops/:id/settings` | Settings. Validated by the same zod schema (`shopConfigSchema`) as the CLI; errors are shown inline and an invalid config is never saved. An empty field means "use the default". |
 | `POST /admin/shops/:id/staff`, `.../staff/remove` | Staff add/remove. Phones are normalized to E.164 and shown as the last 4 digits only. |
 | `POST /admin/shops/:id/import` | CSV/XLSX/XLSM upload. Same importer as `npm run stock:import`. The file goes to a private temp dir and is deleted after the import; nothing is uploaded anywhere. |
-| `GET /admin/app` | Read-only: DRY_RUN, OneEPC URL + reachability, Zernio configured yes/no, DB, queue depth, version/commit, AI on/off + model + fallback + key check (the key itself is never shown) |
+| `GET /admin/app` | Read-only: DRY_RUN, OneEPC URL + reachability, Zernio configured yes/no, DB, queue depth, version/commit, AI on/off, recent-call health from `ai_attempts` (success rate, last error such as quota/timeout, latency per model), provider + model + retry target per provider, shops on a non-default provider, key check (keys are never shown) |
 | `GET /admin/synonyms`, `POST /admin/synonyms`, `POST /admin/synonyms/:id`, `.../:id/delete` | Synonym list (the deterministic layer; see docs/ai.md): add, edit, enable/disable, delete |
 | `POST /admin/synonym-suggestions/:id/approve`, `.../reject` | Pending suggestions from the AI. Approve (optionally editing the canonical words) adds them to the list; nothing is applied automatically |
 | `GET /admin/audit` | Last 200 admin actions (who, what, when in Asia/Riyadh) |

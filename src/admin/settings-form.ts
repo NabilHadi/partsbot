@@ -4,7 +4,7 @@
  * As in the CLI, only explicitly chosen keys are stored ("default" = key removed, so improved defaults reach the shop).
  */
 import { AdminInputError, parseWindows, type RawConfig } from "./shop-admin.js";
-import { AFTER_HOURS_MODES, STOCK_DISPLAY, WEEKDAYS, shopConfigSchema, type ShopConfig } from "../bot/shop-config.js";
+import { AFTER_HOURS_MODES, AI_PROVIDER_CHOICES, STOCK_DISPLAY, WEEKDAYS, shopConfigSchema, type ShopConfig } from "../bot/shop-config.js";
 
 export type FieldKind = "bool" | "enum" | "text" | "int";
 export interface FieldDef {
@@ -22,6 +22,7 @@ export const SETTINGS_FIELDS: FieldDef[] = [
   { key: "showAlternatives", kind: "bool", label: "Show alternative parts", hint: "Variants of the same base number (CH, J, DENSO...).", group: "Customer-facing replies" },
   { key: "priceQuotingEnabled", kind: "bool", label: "Show prices", hint: "Show the shop's price next to stock lines.", group: "Customer-facing replies" },
   { key: "aiEnabled", kind: "bool", label: "AI assistant", hint: "AI understands messages and words replies. Part numbers still come only from OneEPC; needs AI_ENABLED on the server.", group: "Customer-facing replies" },
+  { key: "aiProvider", kind: "enum", options: AI_PROVIDER_CHOICES, label: "AI provider", hint: "server_default = AI_PROVIDER on the server. A provider with no API key on the server falls back to the default.", group: "Customer-facing replies" },
   { key: "language", kind: "enum", options: ["ar", "en", "auto"], label: "Reply language", hint: "auto = the script of the customer's last message.", group: "Customer-facing replies" },
   { key: "shopName", kind: "text", label: "Shop name in the welcome line", hint: "Empty = omitted.", group: "Customer-facing replies" },
   { key: "afterHoursMode", kind: "enum", options: AFTER_HOURS_MODES, label: "After hours", hint: "reply_with_note = answer + one 'closed now' note; note_only = only the note.", group: "Hours and handoff" },
