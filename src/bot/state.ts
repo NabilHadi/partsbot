@@ -51,6 +51,11 @@ export const conversationStateSchema = z.object({
   pendingPart: z.string().nullable().default(null),
   /** AI path, several parts in one message: every catalogue query (pendingPart is the first one). */
   pendingParts: z.array(z.string()).max(5).default([]),
+  /**
+   * AI path only: English name (q_en) of each remembered Arabic query, so a search made on a later turn
+   * (after the VIN, a variant choice or "بكم؟") still sends both languages. At most a few entries.
+   */
+  partEn: z.record(z.string(), z.string()).default({}),
   /** The last query that produced a confirmed quote ("بكم؟" / "متوفر؟" re-runs it for stock and price). */
   lastQuery: z.string().nullable().default(null),
   clarification: z

@@ -373,39 +373,76 @@ type SearchOutcome =
   /** OneEPC failed: the turn already holds the handoff reply (failOneEpc). */
   | { kind: "failed"; query: string };
 
-/** One catalogue search, no conversation-state decisions (except refreshing an expired vehicle id). */
-async function searchOnce(t: Turn, query: string): Promise<SearchOutcome> {
+/** One OneEPC search call; an expired vehicle_id is refreshed (decode once more with the stored VIN) and retried once. */
+async function searchCall(t: Turn, params: SearchPartsParams): Promise<{ res: OneEpcResult<SearchResponse>; redecoded: boolean }> {
   const { s, deps } = t;
-  const vehicle = s.vehicle;
-  if (!vehicle) return { kind: "failed", query };
-
-  let res: OneEpcResult<SearchResponse>;
   try {
-    try {
-      res = await deps.oneepc.searchParts(vehicle.vehicleId, { q: query, lang: "auto", limit: 5 });
-    } catch (err) {
-      // vehicle_id expired between decode and search: decode once more with the stored VIN, then retry once.
-      if (err instanceof OneEpcError && err.code === "vehicle_not_found" && s.vin) {
-        const d = await deps.oneepc.decode(s.vin);
-        if (d.data.match !== "exact" || !d.data.vehicle) throw err;
-        s.vehicle = { ...toRef(d.data.vehicle, vehicle.acknowledged) };
-        res = await deps.oneepc.searchParts(s.vehicle.vehicleId, { q: query, lang: "auto", limit: 5 });
-      } else {
-        throw err;
-      }
-    }
+    return { res: await deps.oneepc.searchParts(s.vehicle!.vehicleId, params), redecoded: false };
   } catch (err) {
-    failOneEpc(t, err, "search");
-    return { kind: "failed", query };
+    if (err instanceof OneEpcError && err.code === "vehicle_not_found" && s.vin) {
+      const d = await deps.oneepc.decode(s.vin);
+      if (d.data.match !== "exact" || !d.data.vehicle) throw err;
+      s.vehicle = { ...toRef(d.data.vehicle, s.vehicle!.acknowledged) };
+      return { res: await deps.oneepc.searchParts(s.vehicle.vehicleId, params), redecoded: true };
+    }
+    throw err;
   }
-  const { data } = res;
+}
+
+/** Classify one search response (only confirmed, unambiguous results at MIN_QUOTE_SCORE or more are quotable). */
+function outcomeOf(t: Turn, query: string, data: SearchResponse): SearchOutcome {
   const results = data.results.filter((r) => r.score >= MIN_QUOTE_SCORE);
-  t.actions.push({ type: "oneepc_call", endpoint: "search", requestId: res.requestId, dataVersion: res.dataVersion, outcome: `results=${data.results.length} ambiguous=${data.ambiguity.is_ambiguous}` });
   if (data.ambiguity.is_ambiguous) return { kind: "ambiguous", query, question: pickQuestion(data.ambiguity.question_hint, t.lang) };
   const confirmed = results.filter((r) => r.fitment.status === "confirmed");
   if (confirmed.length > 0) return { kind: "confirmed", query, results, confirmed };
   if (results.length > 0) return { kind: "unconfirmed", query };
   return { kind: "none", query };
+}
+
+/** How useful an outcome is when two languages were tried (ties keep the first call). */
+const OUTCOME_RANK: Record<SearchOutcome["kind"], number> = { failed: -1, none: 0, unconfirmed: 1, ambiguous: 2, confirmed: 3 };
+const topScore = (data: SearchResponse) => data.results.reduce((m, r) => Math.max(m, r.score), 0);
+
+/**
+ * One catalogue search for one part, no conversation-state decisions (except refreshing an expired vehicle id).
+ * AI path: `q` = the Arabic name and `q_en` = the English name. If that gives nothing quotable, ONE more call with
+ * the languages swapped (q = English); the better of the two counts. At most 2 search calls per part.
+ * Rules-only path (no AI): Arabic `q` only, one call.
+ */
+async function searchOnce(t: Turn, query: string): Promise<SearchOutcome> {
+  const { s, deps } = t;
+  if (!s.vehicle) return { kind: "failed", query };
+  const qEn = deps.ai ? (s.partEn[query] ?? null) : null;
+  const base = { lang: "auto" as const, limit: 5 };
+
+  let first: { res: OneEpcResult<SearchResponse>; redecoded: boolean };
+  try {
+    first = await searchCall(t, { ...base, q: query, ...(qEn ? { q_en: qEn } : {}) });
+  } catch (err) {
+    failOneEpc(t, err, "search");
+    return { kind: "failed", query };
+  }
+  const log = (res: OneEpcResult<SearchResponse>, primary: "ar" | "en") =>
+    t.actions.push({ type: "oneepc_call", endpoint: "search", requestId: res.requestId, dataVersion: res.dataVersion, outcome: `q=${primary}${qEn ? "+q_en" : ""} results=${res.data.results.length} ambiguous=${res.data.ambiguity.is_ambiguous}` });
+  log(first.res, "ar");
+  const o1 = outcomeOf(t, query, first.res.data);
+  // Swapped retry only when it can help and the call budget allows (a vehicle refresh already used the second call).
+  if (o1.kind === "confirmed" || !qEn || first.redecoded) return o1;
+
+  let second: OneEpcResult<SearchResponse>;
+  try {
+    second = await deps.oneepc.searchParts(s.vehicle.vehicleId, { ...base, q: qEn, q_en: query });
+  } catch {
+    // The first answer stands; a failed optional retry is not worth a handoff.
+    t.actions.push({ type: "oneepc_call", endpoint: "search", requestId: null, dataVersion: null, outcome: "q=en+q_en failed (first answer kept)" });
+    return o1;
+  }
+  log(second, "en");
+  const o2 = outcomeOf(t, query, second.data);
+  const r1 = OUTCOME_RANK[o1.kind];
+  const r2 = OUTCOME_RANK[o2.kind];
+  const better = r2 > r1 || (r2 === r1 && topScore(second.data) > topScore(first.res.data));
+  return better ? o2 : o1;
 }
 
 /** Quote confirmed results (one partsQuoted segment) and remember them. */
@@ -764,6 +801,11 @@ function mergeUnderstanding(t: Turn, rule: ParsedMessage, u: Understanding): Par
     if (q.suggestion) t.actions.push({ type: "synonym_suggestion", ...q.suggestion });
   }
   t.aiQueries = queries;
+  if (queries.length > 0) {
+    // English names for the queries of this message (plus the last quoted one, for "بكم؟").
+    const keep = s.lastQuery && s.partEn[s.lastQuery] ? { [s.lastQuery]: s.partEn[s.lastQuery]! } : {};
+    s.partEn = { ...keep, ...Object.fromEntries(queries.filter((q) => q.queryEn).slice(0, 5).map((q) => [q.query, q.queryEn!])) };
+  }
   let partRequest: string | null = queries[0]?.query ?? null;
   let partsVocab = queries.length > 0;
   // "بكم؟" / "متوفر؟" with no part named: the last quoted part again (stock and price come from the quote).

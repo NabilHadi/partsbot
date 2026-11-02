@@ -8,6 +8,7 @@ import type { Understanding } from "../ai/understand.js";
 import { Conversation } from "./conversation-driver.js";
 import { findPartNumberLikeTokens } from "./guard.js";
 import { recording, startMock } from "./testkit.js";
+import type { OneEpcLike } from "./engine.js";
 
 const LC = "TESTLC20220000001";
 const synonyms = new SynonymIndex(SYNONYM_SEED.map(([term, canonicalAr, canonicalEn]) => ({ term, canonicalAr, canonicalEn })));
@@ -176,5 +177,83 @@ describe("AI understand -> synonyms -> OneEPC -> code decides", () => {
     c.botMessages = 1;
     await c.say("ابي فلتر زيت");
     expect(provider.calls).toHaveLength(0);
+  });
+});
+
+describe("search sends both languages (q + q_en), at most 2 calls per part", () => {
+  /** Records every search's params; `ignoreQEn` simulates a server that only reads q. */
+  function spyOneEpc(ignoreQEn: boolean) {
+    const searches: Array<{ q?: string; q_en?: string }> = [];
+    const oneepc = {
+      decode: (v: string) => mock.client.decode(v),
+      searchParts: (id: string, p: { q?: string; q_en?: string } = {}) => {
+        searches.push({ q: p.q, q_en: p.q_en });
+        return mock.client.searchParts(id, ignoreQEn ? { ...p, q_en: undefined } : p);
+      },
+    };
+    return { oneepc, searches };
+  }
+  function aiConvWith(oneepc: OneEpcLike, parts: Understanding["parts"]) {
+    const provider = scriptedProvider((req) => {
+      if (req.stage === "understand") return understanding({ vin_or_frame: LC, parts });
+      if (req.stage === "compose") return { reply: draftOf(req) };
+      return { keep: [], question: null };
+    });
+    const c = new Conversation(oneepc, { aiEnabled: true });
+    c.extras = { ai: engineAi(provider), synonyms };
+    return c;
+  }
+
+  it("pipe-05: 'فلتر الهوا تبع المكينة' is searched as فلتر هواء + q_en air filter and quoted in ONE call", async () => {
+    const { oneepc, searches } = spyOneEpc(false);
+    const c = aiConvWith(oneepc, [{ customer_words: "فلتر الهوا تبع المكينة", normalized_en: "engine air filter", normalized_ar: "فلتر هواء المحرك", position: null, qty: null }]);
+    const r = await c.say(`${LC} فلتر الهوا تبع المكينة`);
+    expect(searches).toEqual([{ q: "فلتر هواء", q_en: "air filter" }]);
+    expect(r.replies.join("\n")).toContain("00000-EXAMPLE6");
+  });
+
+  it("nothing quotable with q (server ignores q_en): ONE retry with the languages swapped, and its result is quoted", async () => {
+    const { oneepc, searches } = spyOneEpc(true);
+    const c = aiConvWith(oneepc, [{ customer_words: "منقي الهوا", normalized_en: "air filter", normalized_ar: "منقي هواء المحرك", position: null, qty: null }]);
+    const r = await c.say(`${LC} منقي الهوا`);
+    expect(searches).toEqual([
+      { q: "منقي هواء المحرك", q_en: "air filter" },
+      { q: "air filter", q_en: "منقي هواء المحرك" },
+    ]);
+    expect(r.replies.join("\n")).toContain("00000-EXAMPLE6");
+    expect(r.actions.filter((a) => a.type === "oneepc_call" && a.endpoint === "search")).toHaveLength(2);
+  });
+
+  it("neither language finds it: exactly 2 calls, then the usual no-results reply", async () => {
+    const { oneepc, searches } = spyOneEpc(true);
+    const c = aiConvWith(oneepc, [{ customer_words: "زنبرك الكرسي", normalized_en: "seat spring", normalized_ar: "زنبرك المقعد", position: null, qty: null }]);
+    const r = await c.say(`${LC} زنبرك الكرسي`);
+    expect(searches).toHaveLength(2);
+    expect(r.newState.step).toBe("awaiting_part");
+    expect(r.replies.join("\n")).not.toMatch(/00000-EXAMPLE/);
+  });
+
+  it("the English name is remembered for a search made on a later turn (part first, VIN after)", async () => {
+    const { oneepc, searches } = spyOneEpc(false);
+    const provider = scriptedProvider((req) => {
+      if (req.stage === "understand") return understanding({ parts: [{ customer_words: "فلتر الهوا", normalized_en: "air filter", normalized_ar: "فلتر هواء", position: null, qty: null }] });
+      if (req.stage === "compose") return { reply: draftOf(req) };
+      return { keep: [], question: null };
+    });
+    const c = new Conversation(oneepc, { aiEnabled: true });
+    c.extras = { ai: engineAi(provider), synonyms };
+    await c.say("ابي فلتر الهوا");
+    expect(searches).toEqual([]);
+    const r = await c.say(LC);
+    expect(searches).toEqual([{ q: "فلتر هواء", q_en: "air filter" }]);
+    expect(r.replies.join("\n")).toContain("00000-EXAMPLE6");
+  });
+
+  it("rules-only path (no AI): Arabic q only, one call", async () => {
+    const { oneepc, searches } = spyOneEpc(false);
+    const c = new Conversation(oneepc, {});
+    c.extras = { synonyms };
+    await c.say(`${LC} زنبرك الكرسي`);
+    expect(searches).toEqual([{ q: "زنبرك الكرسي", q_en: undefined }]);
   });
 });

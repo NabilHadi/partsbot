@@ -6,7 +6,7 @@
  * A mapping the model produced that the table does not know becomes a PENDING suggestion for the admin
  * (never applied automatically).
  */
-import { normalizeAr, toLatinDigits } from "../bot/intent.js";
+import { cleanPartRequest, normalizeAr, toLatinDigits } from "../bot/intent.js";
 import type { AiPart } from "./understand.js";
 
 export interface SynonymEntry {
@@ -117,6 +117,7 @@ export class SynonymIndex {
 }
 
 export const POSITION_AR: Record<string, string> = { front: "أمامية", rear: "خلفية", left: "يسار", right: "يمين" };
+export const POSITION_EN: Record<string, string> = { front: "front", rear: "rear", left: "left", right: "right" };
 const POSITION_WORDS: Record<string, string[]> = {
   front: ["امامي", "اماميه", "امامية", "قدام", "قدامي", "front"],
   rear: ["خلفي", "خلفيه", "خلفية", "خلف", "ورا", "rear", "back"],
@@ -125,8 +126,10 @@ const POSITION_WORDS: Record<string, string[]> = {
 };
 
 export interface PartQuery {
-  /** Text sent to the catalogue search. */
+  /** Text sent to the catalogue search (`q`, Arabic when known). */
   query: string;
+  /** English name of the same part, sent as `q_en` (and as `q` in the one language-swapped retry); null if unknown. */
+  queryEn: string | null;
   /** "table" = the synonym list decided the name; "ai" = the model's normalized name (not in the table). */
   source: "table" | "ai" | "raw";
   /** The customer's words are not in the list: proposed mapping for the admin (never applied automatically). */
@@ -145,33 +148,47 @@ const hasPartNumberish = (s: string) => /[A-Za-z0-9]*\d[A-Za-z0-9-]{4,}/.test(to
  * The position word is added by code from the structured `position` field.
  */
 export function queryForAiPart(p: AiPart, index: SynonymIndex | null): PartQuery {
-  const fromCustomer = index?.rewrite(p.customer_words);
+  // Filler ("ابي", "لو سمحت", "تبع المكينة") never reaches the search, also when the table rewrites the rest.
+  // Part numbers are left exactly as typed (the cleaner would split "04465-06090").
+  const customer = hasPartNumberish(p.customer_words) ? p.customer_words : (cleanPartRequest(p.customer_words) ?? p.customer_words);
+  const fromCustomer = index?.rewrite(customer);
   let base: string;
+  let en: string | null = null;
   let source: PartQuery["source"];
   let canonical: { ar: string; en: string } | null = null;
+  /** English from the table when the hits cover every (non-position) word; otherwise the model's English name. */
+  const tableEn = (text: string, hits: SynonymHit[]) => {
+    const covered = new Set(hits.flatMap((h) => Array.from({ length: h.end - h.start }, (_, k) => h.start + k)));
+    const rest = tokenize(text).filter((w, i) => !covered.has(i) && !ALL_POSITION_KEYS.has(tokenKey(w)));
+    return rest.length === 0 ? hits.map((h) => h.canonicalEn).join(" ") : p.normalized_en.trim() || null;
+  };
   if (fromCustomer && fromCustomer.hits.length > 0) {
     base = fromCustomer.text;
+    en = tableEn(customer, fromCustomer.hits);
     source = "table";
   } else {
     const fromAr = index && p.normalized_ar ? index.rewrite(p.normalized_ar) : null;
     const enHits = index && p.normalized_en ? index.match(p.normalized_en) : [];
     if (fromAr && fromAr.hits.length > 0) {
       base = fromAr.text;
+      en = tableEn(p.normalized_ar, fromAr.hits);
       source = "table";
       if (fromAr.hits.length === 1) canonical = { ar: fromAr.hits[0]!.canonicalAr, en: fromAr.hits[0]!.canonicalEn };
     } else if (enHits.length === 1) {
       base = enHits[0]!.canonicalAr;
+      en = enHits[0]!.canonicalEn;
       source = "table";
       canonical = { ar: enHits[0]!.canonicalAr, en: enHits[0]!.canonicalEn };
     } else {
-      base = p.normalized_ar || p.normalized_en || p.customer_words;
+      base = p.normalized_ar || p.normalized_en || customer;
+      en = p.normalized_en.trim() || null;
       source = p.normalized_ar || p.normalized_en ? "ai" : "raw";
       if (p.normalized_ar) canonical = { ar: p.normalized_ar.trim(), en: p.normalized_en.trim() };
     }
   }
   let suggestion: SuggestionInput | null = null;
   if (index && canonical && !hasPartNumberish(p.customer_words)) {
-    const words = tokenize(p.customer_words).filter((w) => !ALL_POSITION_KEYS.has(tokenKey(w)));
+    const words = tokenize(customer).filter((w) => !ALL_POSITION_KEYS.has(tokenKey(w)));
     const term = words.join(" ");
     const key = synonymKey(term);
     if (words.length >= 1 && words.length <= 4 && key.length >= 2 && key !== synonymKey(canonical.ar) && !index.has(term)) {
@@ -182,6 +199,12 @@ export function queryForAiPart(p: AiPart, index: SynonymIndex | null): PartQuery
     // Code owns the position wording: dialect words (قدام، ورا) are replaced by the catalogue word.
     const kept = tokenize(base).filter((w) => !ALL_POSITION_KEYS.has(tokenKey(w)));
     base = [...(kept.length ? kept : [base]), POSITION_AR[p.position]].join(" ");
+    if (en) {
+      const keptEn = tokenize(en).filter((w) => !ALL_POSITION_KEYS.has(tokenKey(w)));
+      en = [POSITION_EN[p.position], ...(keptEn.length ? keptEn : [en])].join(" ");
+    }
   }
-  return { query: base.trim(), source, suggestion };
+  const query = base.trim();
+  const queryEn = en && synonymKey(en) !== synonymKey(query) ? en.trim() : null;
+  return { query, queryEn, source, suggestion };
 }

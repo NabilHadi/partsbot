@@ -9,6 +9,10 @@ The AI helps the bot understand customer messages and word its replies. **It nev
 3. **AI understand** (`understand.ts`): returns zod-checked JSON with the intent, the parts (with position/side), the vehicle hints and the language. The call is skipped when the rules are enough (a bare VIN, a short yes/no, a variant pick). If it fails or is invalid, the rules result is used.
    Words the AI mapped that the synonym list doesn't know become **pending suggestions** (`synonym_suggestions`). They are never applied automatically; an admin approves or rejects them at `/admin/synonyms`.
 4. **OneEPC decode + search**: this is the only source of part numbers.
+   - Decode takes **17-character VINs only**. A frame number (`GGN120-0001234`, `M900A-0123456`) is never decoded: the bot asks for the VIN (رقم الهيكل / الشاصي, 17 خانة), and after 3 bad tries it hands off (`invalid_vin_repeated`).
+   - Search query per part: the synonym table's canonical name when it knows the customer's words (filler such as `ابي`, `لو سمحت`, `تبع المكينة`, `حق الجيب` is dropped), otherwise the AI's normalized Arabic name. Code adds the position word.
+   - AI path: `q` = Arabic name, `q_en` = English name (table's `canonical_en`, else the AI's `normalized_en`). If nothing is quotable (no confirmed, unambiguous result at score ≥ 0.6), **one** more call with the languages swapped (`q` = English, `q_en` = Arabic); the better outcome counts. At most 2 search calls per part. The English names are kept in the conversation state (`partEn`) for searches on later turns.
+   - Rules-only path (no AI): Arabic `q` only, one call.
 5. **Code decides** what to show (stock, prices, show-part-numbers settings). When there are several candidates, the AI may only **pick an index** or **ask a question** (`select.ts`). Anything else is ignored.
 6. **AI compose** (`compose.ts`): writes one longer reply from the facts the code passes in. `validate.ts` rejects the draft if it:
    - adds a part number, number, price or URL that isn't in the facts;

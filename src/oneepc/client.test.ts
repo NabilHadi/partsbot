@@ -115,6 +115,30 @@ describe("searchParts", () => {
     expect(broad.data.results.length).toBeGreaterThan(1);
   });
 
+  it("q_en is sent and scored too: the better of q and q_en counts (mock)", async () => {
+    const arOnly = await client.searchParts("veh_example_lc", { q: "فلتر هواء تبع المكينة" });
+    expect(arOnly.data.results.find((r) => r.part_number === "00000-EXAMPLE6")?.score).toBe(0.5);
+    const both = await client.searchParts("veh_example_lc", { q: "فلتر هواء تبع المكينة", q_en: "air filter" });
+    expect(both.data.results[0]).toMatchObject({ part_number: "00000-EXAMPLE6", score: 1 });
+    expect(both.data.query.q).toBe("فلتر هواء تبع المكينة");
+  });
+
+  it("q_en goes on the query string; empty q_en is left out", async () => {
+    const urls: string[] = [];
+    const stub = new OneEpcClient({
+      baseUrl: "http://oneepc.invalid/v1",
+      apiKey: "k",
+      fetch: (async (u: string | URL) => {
+        urls.push(String(u));
+        return new Response(JSON.stringify({ vehicle_id: "v", query: { q: "x", lang_detected: "ar" }, ambiguity: { is_ambiguous: false, reason: null, question_hint: null, attributes: [] }, results: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+    await stub.searchParts("v", { q: "فلتر هواء", q_en: "air filter" }).catch(() => undefined);
+    await stub.searchParts("v", { q: "فلتر هواء", q_en: "" }).catch(() => undefined);
+    expect(new URL(urls[0]!).searchParams.get("q_en")).toBe("air filter");
+    expect(new URL(urls[1]!).searchParams.has("q_en")).toBe(false);
+  });
+
   it("200 with empty results when nothing matches", async () => {
     const { data } = await client.searchParts("veh_example_lc", { q: "xyzzy flux capacitor" });
     expect(data.results).toEqual([]);

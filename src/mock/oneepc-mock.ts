@@ -101,11 +101,12 @@ export function buildMockServer(opts: MockOptions = {}): FastifyInstance {
       // 2. Search parts for a vehicle
       api.get<{
         Params: { vehicle_id: string };
-        Querystring: { q?: string; lang?: string; category?: string; limit?: string };
+        Querystring: { q?: string; q_en?: string; lang?: string; category?: string; limit?: string };
       }>("/vehicles/:vehicle_id/parts/search", async (req, reply) => {
         const { vehicle_id } = req.params;
         const { lang = "auto", category } = req.query;
         const q = (req.query.q ?? "").trim();
+        const qEn = (req.query.q_en ?? "").trim();
 
         if (!q && !category) return sendError(reply, 400, "missing_query", "Provide q or category");
         if (!["ar", "en", "auto"].includes(lang)) {
@@ -120,19 +121,21 @@ export function buildMockServer(opts: MockOptions = {}): FastifyInstance {
         }
 
         // Drop the Arabic definite article so "الفرامل" matches "فرامل".
-        const tokens = normalizeText(q)
-          .split(/\s+/)
-          .filter(Boolean)
-          .map((t) => (t.length > 3 ? t.replace(/^ال/, "") : t));
+        const toTokens = (text: string) =>
+          normalizeText(text)
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((t) => (t.length > 3 ? t.replace(/^ال/, "") : t));
+        // q and the optional q_en are scored separately; the better score counts.
+        const queries = [toTokens(q), toTokens(qEn)].filter((t) => t.length > 0);
         const scored = ALL_PARTS.flatMap((p) => {
           const fitment = p.fitment[vehicle_id];
           if (!fitment) return [];
           if (category && p.category.id !== category) return [];
           let score = 1;
-          if (tokens.length) {
+          if (queries.length) {
             const haystack = normalizeText([p.name.ar ?? "", p.name.en ?? "", ...p.keywords].join(" "));
-            const hits = tokens.filter((t) => haystack.includes(t)).length;
-            score = Math.round((hits / tokens.length) * 100) / 100;
+            score = Math.max(...queries.map((tokens) => Math.round((tokens.filter((t) => haystack.includes(t)).length / tokens.length) * 100) / 100));
             if (score < 0.5) return []; // text match too weak
           }
           return [{ part: p, fitment, score }];

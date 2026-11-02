@@ -28,6 +28,12 @@ describe("extractVin", () => {
   it("reports a wrong length without guessing", () => {
     expect(extractVin("TESTLC2022000001")).toMatchObject({ vin: null, problem: "bad_length" }); // 16
     expect(extractVin("TESTLC202200000012")).toMatchObject({ vin: null, problem: "bad_length" }); // 18
+    // VINs only for now: frame numbers are recognised (to ask for the VIN), never decoded.
+    for (const f of ["GGN120-0001234", "GGN1200001234", "KDJ150 0012345", "M900A-0123456", "فريمي GGN120-0001234"]) {
+      expect(extractVin(f), f).toMatchObject({ vin: null, problem: "frame_number" });
+    }
+    // Part numbers are not frame numbers.
+    for (const pn of ["04465-06090", "90915-YZZD1", "58101-D3A00"]) expect(extractVin(pn).problem, pn).toBeNull();
   });
   it("does not mistake normal words or short codes for a VIN attempt", () => {
     expect(extractVin("ابغى فلتر زيت لكامري 2020")).toMatchObject({ vin: null, problem: null });

@@ -36,7 +36,8 @@ const normSet = (words: string[]): Set<string> => new Set(words.map(norm));
 
 // ---------------------------------------------------------------- VIN
 
-export type VinProblem = "bad_chars" | "bad_length";
+/** `frame_number` = a Toyota/Daihatsu frame number ("GGN120-0001234"): not accepted, we ask for the 17-character VIN. */
+export type VinProblem = "bad_chars" | "bad_length" | "frame_number";
 export interface VinExtraction {
   vin: string | null;
   /** Set when the text looks like a VIN attempt that is not valid (so the bot can ask for it again). */
@@ -47,6 +48,8 @@ export interface VinExtraction {
 
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
 const GAP_RE = /^[ \u00A0\-\u2010-\u2015]+$/;
+/** Frame number shape: model code (1-4 letters, 1-3 digits, optional letter) + serial of 5-8 digits. */
+const FRAME_RE = /(?<![A-Z0-9])[A-Z]{1,4}\d{1,3}[A-Z]?[ \u00A0\-\u2010-\u2015]?\d{5,8}(?![A-Z0-9])/;
 
 /**
  * Find a 17-character VIN. Spaces and dashes between groups are ignored, letters are uppercased,
@@ -83,8 +86,12 @@ export function extractVin(text: string): VinExtraction {
       }
     }
   }
-  const problem = invalid17 ?? (badLength ? "bad_length" : null);
-  return { vin: null, problem, rest: t.replace(/\s+/g, " ").trim() };
+  // VINs only for now: a frame number is never decoded, the customer is asked for the VIN instead.
+  const frame = invalid17 ? null : FRAME_RE.exec(t.toUpperCase());
+  const problem = invalid17 ?? (frame ? "frame_number" : badLength ? "bad_length" : null);
+  // The frame number is not part of the part request (same length in upper case, so the index carries over).
+  const restText = frame ? t.slice(0, frame.index) + " " + t.slice(frame.index + frame[0].length) : t;
+  return { vin: null, problem, rest: restText.replace(/\s+/g, " ").trim() };
 }
 
 // ---------------------------------------------------------------- language
@@ -127,6 +134,16 @@ const GREETING_WORDS = normSet([
 const FILLER_WORDS = normSet([
   "و", "الشاصي", "شاصي", "الشاسي", "شاسي", "رقم", "الهيكل", "هيكل", "تفضل", "اتفضل", "هاك", "هذاك", "vin", "chassis", "number", "no", "ابغى", "ابغا", "ابغي", "ابي", "ابا", "ابى", "اريد", "ابغاه", "ابغاها", "بغيت", "بغينا", "ودي", "تبي", "تبغى", "عندكم", "عندك", "عندكم", "هل", "فيه", "فيها", "يوجد", "متوفر", "متوفره", "موجود", "موجوده", "لو", "سمحت", "فضلك", "من", "ممكن", "تكرمت", "الله", "يعطيك", "العافيه", "لي", "عشان", "مطلوب", "سياره", "سيارتي", "سيارتنا", "لسيارتي", "لسياره", "لدي", "عندي", "في", "على", "علي", "مع", "هذي", "هذا", "هذه", "ذي", "طلب", "نوع", "كم", "سعر", "قطعه", "قطع",
   "i", "need", "want", "looking", "for", "do", "you", "have", "got", "please", "pls", "my", "car", "the", "a", "an", "some", "any", "is", "there", "can", "get", "me", "to", "buy", "of",
+]);
+
+/**
+ * Gulf possessive particles ("تبع", "حق", "مال" = "of / for"). Dropped on their own, and together with the word
+ * after them when that word only says what the part belongs to ("تبع المكينة", "حق الجيب"): the catalogue name
+ * already carries that, and the extra words dilute the search score.
+ */
+const POSSESSIVE_WORDS = normSet(["تبع", "تبعت", "تبعة", "تبعه", "تبعها", "حق", "حقت", "حقة", "حقه", "حقها", "مال", "مالت"]);
+const OWNER_WORDS = normSet([
+  "المكينة", "المكينه", "مكينة", "مكينه", "المكينة", "المحرك", "محرك", "الماتور", "ماتور", "السيارة", "السياره", "سيارة", "سياره", "سيارتي", "الجيب", "جيب", "الموتر", "موتر", "الوانيت", "وانيت", "الشاص", "engine", "car", "motor",
 ]);
 
 /** Common model names; stripped (with optional ل prefix) so they do not dilute the part search text. */
@@ -190,8 +207,10 @@ const stripLam = (n: string) => (n.length > 3 && n.startsWith("ل") ? n.slice(1)
 
 export function cleanPartRequest(text: string, opts: ParseOptions = {}): string | null {
   const hintTokens = new Set((opts.modelHints ?? []).flatMap((h) => norm(h).split(/\s+/)).filter(Boolean));
-  const kept = cleanTokens(text).filter(({ n }) => {
-    if (GREETING_WORDS.has(n) || FILLER_WORDS.has(n) || isYear(n)) return false;
+  const toks = cleanTokens(text);
+  const kept = toks.filter(({ n }, i) => {
+    if (GREETING_WORDS.has(n) || FILLER_WORDS.has(n) || POSSESSIVE_WORDS.has(n) || isYear(n)) return false;
+    if (i > 0 && POSSESSIVE_WORDS.has(toks[i - 1]!.n) && OWNER_WORDS.has(n)) return false; // "تبع المكينة"
     const bare = stripLam(n);
     if (MODEL_TOKENS.has(n) || MODEL_TOKENS.has(bare) || hintTokens.has(n) || hintTokens.has(bare)) return false;
     return true;

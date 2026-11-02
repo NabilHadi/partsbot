@@ -23,6 +23,22 @@ describe("synonym list (deterministic layer)", () => {
     expect(index.rewrite("دبة الماي").hits).toEqual([]);
   });
 
+  it("table hit on the customer's words: filler and 'تبع المكينة' are dropped, English comes from the table (pipe-05)", () => {
+    const q = queryForAiPart(part({ customer_words: "فلتر الهوا تبع المكينة", normalized_ar: "فلتر هواء المحرك", normalized_en: "engine air filter" }), index);
+    expect(q).toMatchObject({ query: "فلتر هواء", queryEn: "air filter", source: "table", suggestion: null });
+    const q2 = queryForAiPart(part({ customer_words: "ابي كرتون الزيت حق الجيب", normalized_ar: "فلتر زيت", normalized_en: "oil filter" }), index);
+    expect(q2).toMatchObject({ query: "فلتر زيت", queryEn: "oil filter", source: "table" });
+  });
+
+  it("queryEn: the model's English name when the table does not know the words; position in both languages", () => {
+    const q = queryForAiPart(part({ customer_words: "دبة الماي", normalized_ar: "خزان ماء الغسيل", normalized_en: "washer reservoir" }), index);
+    expect(q).toMatchObject({ query: "خزان ماء الغسيل", queryEn: "washer reservoir", source: "ai" });
+    const r = queryForAiPart(part({ customer_words: "قماشات ورا", normalized_ar: "بطانات فرامل", normalized_en: "brake linings", position: "rear" }), index);
+    expect(r.queryEn).toBe("rear brake pads");
+    const en = queryForAiPart(part({ customer_words: "wiper blade", normalized_en: "wiper blade" }), null);
+    expect(en).toMatchObject({ query: "wiper blade", queryEn: null }); // same text: no point sending it twice
+  });
+
   it("the list beats the AI: a known customer word wins over the model's name", () => {
     const q = queryForAiPart(part({ customer_words: "قماشات ورا", normalized_ar: "بطانات فرامل", normalized_en: "brake linings", position: "rear" }), index);
     expect(q).toMatchObject({ query: "فحمات فرامل خلفية", source: "table", suggestion: null });

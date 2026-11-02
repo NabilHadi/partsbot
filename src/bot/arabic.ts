@@ -228,16 +228,23 @@ export const T = {
     en: () => "Please send your VIN (17 characters, from the registration card) and tell me which part you need.",
   },
 
-  /** The text looked like a VIN but was not valid: explain once, simply. `bad_chars` = contains I/O/Q, `bad_length` = not 17. */
+  /**
+   * The text looked like a VIN but was not valid: explain once, simply. `bad_chars` = contains I/O/Q, `bad_length` = not 17,
+   * `frame_number` = a frame number (only 17-character VINs are accepted for now).
+   */
   invalidVin: {
-    ar: (p: { problem: "bad_chars" | "bad_length" }) =>
+    ar: (p: { problem: "bad_chars" | "bad_length" | "frame_number" }) =>
       p.problem === "bad_chars"
         ? "رقم الشاصي فيه حرف غير مقبول 🙏 الرقم الصحيح 17 خانة وما فيه الحروف I و O و Q (غالباً تكون الصفر 0 أو الرقم 1). تأكد من الاستمارة وأرسله مرة ثانية."
-        : "رقم الشاصي اللي وصلني مو مضبوط 🙏 لازم يكون 17 خانة (حروف وأرقام). تأكد من الاستمارة وأرسله مرة ثانية.",
-    en: (p: { problem: "bad_chars" | "bad_length" }) =>
+        : p.problem === "frame_number"
+          ? "هذا رقم الفريم (الإطار) 🙏 حالياً نحتاج رقم الهيكل / الشاصي (VIN) من استمارة السيارة، 17 خانة (حروف وأرقام). أرسله لي وأكمل لك."
+          : "رقم الشاصي اللي وصلني مو مضبوط 🙏 لازم يكون 17 خانة (حروف وأرقام). تأكد من الاستمارة وأرسله مرة ثانية.",
+    en: (p: { problem: "bad_chars" | "bad_length" | "frame_number" }) =>
       p.problem === "bad_chars"
         ? "That VIN contains a letter that is not allowed 🙏 A VIN has 17 characters and never contains the letters I, O or Q (usually it is the digit 0 or 1). Please check the card and send it again."
-        : "That VIN doesn't look complete 🙏 It must be exactly 17 characters (letters and digits). Please check the card and send it again.",
+        : p.problem === "frame_number"
+          ? "That looks like a frame number 🙏 For now I need the VIN: 17 characters (letters and digits), from the registration card. Please send it and I'll continue."
+          : "That VIN doesn't look complete 🙏 It must be exactly 17 characters (letters and digits). Please check the card and send it again.",
   },
 
   /** Exact decode, no part request yet: one-line vehicle confirmation, ask yes/no, ask for the part. */

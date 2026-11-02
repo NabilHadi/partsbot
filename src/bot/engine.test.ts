@@ -208,6 +208,32 @@ describe("invalid VIN", () => {
   });
 });
 
+describe("VINs only: a frame number gets a polite ask for the 17-character VIN", () => {
+  it("never decodes a frame number, asks for رقم الهيكل (17), keeps the part, and hands off after repeated tries", async () => {
+    const rec = recording(mock.client);
+    const c = newConv(rec);
+    const r1 = await c.say("ابي فلتر زيت GGN120-0001234");
+    expect(r1.replies).toHaveLength(1);
+    expect(r1.replies[0]).toContain("رقم الهيكل");
+    expect(r1.replies[0]).toContain("17");
+    expect(r1.newState).toMatchObject({ step: "awaiting_vin", pendingPart: "فلتر زيت" });
+    expect(rec.calls).toEqual([]);
+    let last = r1;
+    for (let i = 0; i < 5 && last.newState.step !== "handoff"; i++) last = await c.say("GGN1200001234");
+    expect(last.newState.step).toBe("handoff");
+    expect(last.actions).toContainEqual({ type: "handoff", reason: "invalid_vin_repeated" });
+    expect(c.turns.filter((t) => t.from === "bot")).toHaveLength(3); // 2 asks + the handoff, no endless loop
+    expect(rec.calls).toEqual([]);
+  });
+
+  it("the VIN after a frame number is accepted normally", async () => {
+    const c = newConv();
+    await c.say("M900A-0123456");
+    const r = await c.say(`${LC} فلتر زيت`);
+    expect(r.replies.join("\n")).toContain("00000-EXAMPLE4");
+  });
+});
+
 describe("runtime part-number guard", () => {
   it("blocks a reply that would contain a number the API did not return as a part number", async () => {
     // The API's own text field smuggles in a different number: the guard must stop the whole reply.

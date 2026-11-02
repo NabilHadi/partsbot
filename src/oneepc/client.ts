@@ -35,6 +35,8 @@ export interface OneEpcResult<T> {
 
 export interface SearchPartsParams {
   q?: string;
+  /** Optional English name of the same part (the server scores both and keeps the better match). */
+  q_en?: string;
   lang?: Lang;
   category?: string;
   limit?: number;
@@ -77,7 +79,7 @@ export class OneEpcClient {
   searchParts(vehicleId: string, params: SearchPartsParams = {}): Promise<OneEpcResult<SearchResponse>> {
     return this.get(
       `/vehicles/${encodeURIComponent(vehicleId)}/parts/search`,
-      { q: params.q, lang: params.lang, category: params.category, limit: params.limit },
+      { q: params.q, q_en: params.q_en, lang: params.lang, category: params.category, limit: params.limit },
       searchResponseSchema,
     );
   }
