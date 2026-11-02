@@ -11,6 +11,8 @@ const envSchema = z.object({
   ZERNIO_WEBHOOK_SECRET: z.string().min(16, "use at least 16 characters").optional(),
   /** Zernio accountId of the connected WhatsApp number; events for other accounts are ignored. */
   ZERNIO_ACCOUNT_ID: z.string().min(1).optional(),
+  /** Admin web UI (/admin) password, single admin user. Unset = /admin answers 503. Never logged. */
+  ADMIN_PASSWORD: z.string().min(1).optional(),
   /** Worker only. Default TRUE: the bot logs reply ids/lengths and sends nothing. Only "false", "0" or "no" turn it off. */
   DRY_RUN: z
     .string()

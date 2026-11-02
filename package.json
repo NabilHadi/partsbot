@@ -22,6 +22,8 @@
     "shop": "tsx src/scripts/shop.ts"
   },
   "dependencies": {
+    "@fastify/formbody": "^8.0.2",
+    "@fastify/multipart": "^9.4.0",
     "@zernio/node": "0.2.1325",
     "exceljs": "^4.4.0",
     "fastify": "^5.12.7",

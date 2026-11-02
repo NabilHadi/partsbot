@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Db } from "./db/pool.js";
+import { adminRoutes, type AdminDeps } from "./admin/routes.js";
 import { zernioWebhookRoutes, type ZernioWebhookDeps } from "./routes/zernio-webhook.js";
 
 export interface ServerDeps {
@@ -9,6 +10,8 @@ export interface ServerDeps {
   logger?: boolean;
   /** When provided, mounts POST /webhooks/zernio. Omit to leave the route off. */
   zernio?: ZernioWebhookDeps;
+  /** When provided, mounts the admin web UI under /admin (503 there if no ADMIN_PASSWORD). */
+  admin?: AdminDeps;
 }
 
 /** App factory: builds the Fastify instance without listening, so tests can use inject(). */
@@ -27,6 +30,7 @@ export function buildServer(deps: ServerDeps = {}): FastifyInstance {
   });
 
   if (deps.zernio) void app.register(zernioWebhookRoutes(deps.zernio));
+  if (deps.admin) void app.register(adminRoutes(deps.admin));
 
   return app;
 }

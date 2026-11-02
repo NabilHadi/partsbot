@@ -98,6 +98,10 @@ All message texts: `docs/bot-templates.md` (regenerate with `npm run templates`)
 PDPL: logs carry ids, counts and codes only (never message text or phone numbers). `bot_conversation_state` holds no phone number or message history,
 only the VIN, the confirmed vehicle and the part request typed while waiting for the VIN; rows get `retention_until` = 30 days (purge job still to write).
 
+## Admin web UI
+
+`/admin` on the main server: shops, shop settings, staff, stock imports, app status and an audit log. It needs `ADMIN_PASSWORD` in the environment and answers 503 without it. See [docs/admin-ui.md](docs/admin-ui.md).
+
 ## OneEPC client notes
 
 - `Authorization: Bearer <key>`; errors are parsed from the spec's `{ error: { code, message, request_id } }`
