@@ -67,6 +67,15 @@ export function buildMockServer(opts: MockOptions = {}): FastifyInstance {
         }
       });
 
+      // 0. Status (same shape as the live oneepc.com /status)
+      api.get("/status", async () => ({
+        ok: true,
+        api_version: "1.0",
+        data_version: DATA_VERSION,
+        brands: ["toyota", "hyundai", "kia", "daihatsu"],
+        markets: { toyota: ["GR", "US", "EU", "JP"], hyundai: ["MES"], kia: ["MES"], daihatsu: ["09", "10", "11"] },
+      }));
+
       // 1. Decode a VIN
       api.get<{ Querystring: { vin?: string } }>("/vehicles/decode", async (req, reply) => {
         const vin = (req.query.vin ?? "").replace(/\s+/g, "").toUpperCase();

@@ -88,3 +88,15 @@ export const searchResponseSchema = z.object({
 export type SearchResponse = z.infer<typeof searchResponseSchema>;
 
 export type Lang = "ar" | "en" | "auto";
+
+// ---- GET /status (live on oneepc.com since Hyundai PR #239) ----
+// Real body: { ok: true, api_version: "1.0", data_version: <sha256 hex>, brands: [...], markets: { brand: [codes] } }
+
+export const statusResponseSchema = z.object({
+  ok: z.literal(true),
+  api_version: z.string(),
+  data_version: z.string(),
+  brands: z.array(z.string()),
+  markets: z.record(z.string(), z.array(z.string())).default({}),
+});
+export type StatusResponse = z.infer<typeof statusResponseSchema>;

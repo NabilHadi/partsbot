@@ -3,6 +3,7 @@
  * Single admin user (ADMIN_PASSWORD); without it every /admin URL answers 503 (fail closed).
  * See src/admin/auth.ts for the session / CSRF / rate-limit design and docs/admin-ui.md for the routes.
  */
+import type { OneEpcCheck } from "../oneepc/routing.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,6 +24,9 @@ import { SETTINGS_FIELDS, applySettingsForm, diffConfig, formValuesFromRaw, type
 export interface AppStatusInfo {
   dryRun: boolean;
   oneepcBaseUrl: string;
+  /** Per-endpoint source (real | mock). Optional for older tests. */
+  oneepcSources?: { decode: "real" | "mock"; search: "real" | "mock" };
+  oneepcMockBaseUrl?: string | null;
   zernioWebhookConfigured: boolean;
   zernioApiKeyConfigured: boolean;
   version: string;
@@ -41,6 +45,8 @@ export interface AdminDeps {
   importFile?: (db: Db, opts: ImportStockOptions) => Promise<ImportStockResult>;
   /** OneEPC reachability probe; default: GET <base> with a 3 s timeout, any HTTP answer = reachable. */
   probe?: (url: string) => Promise<string>;
+  /** GET /status on the real API (with the key) and on the mock. When set, replaces the bare reachability probe. */
+  oneepcCheck?: () => Promise<{ real: OneEpcCheck; mock: OneEpcCheck | null }>;
   maxUploadBytes?: number;
 }
 
@@ -490,12 +496,24 @@ ${auditTable(auditRows.rows.map((a) => ({ ...a, shop_name: null })), false)}`;
     } catch {
       dbState = "DOWN";
     }
-    const reach = await probe(s.oneepcBaseUrl);
     const yes = (b: boolean) => (b ? "yes" : "no");
+    let oneepcRows: Raw;
+    if (deps.oneepcCheck) {
+      const c = await deps.oneepcCheck().catch((): { real: OneEpcCheck; mock: OneEpcCheck | null } => ({ real: { state: "error", detail: "check failed" }, mock: null }));
+      const src = s.oneepcSources ?? { decode: "real", search: "real" };
+      const route = (e: "decode" | "search") =>
+        src[e] === "real" ? html`real API` : html`<strong>mock</strong> <span class="hint">test shops only; real shops get a staff handoff, never mock data</span>`;
+      oneepcRows = html`<tr><th>OneEPC status</th><td>${checkLabel(c.real)}</td></tr>
+<tr><th>OneEPC API key</th><td>${c.real.state === "not_configured" ? "not configured" : c.real.state === "auth_failed" ? "configured, REJECTED by OneEPC" : c.real.state === "ok" ? "configured, accepted" : "configured (not verified)"}</td></tr>
+<tr><th>OneEPC endpoints</th><td>status: real API · VIN decode: ${route("decode")} · parts search: ${route("search")}</td></tr>
+${s.oneepcMockBaseUrl ? html`<tr><th>Mock OneEPC</th><td><code>${s.oneepcMockBaseUrl}</code> · ${c.mock ? checkLabel(c.mock) : "not checked"}</td></tr>` : ""}`;
+    } else {
+      oneepcRows = html`<tr><th>OneEPC reachability</th><td>${await probe(s.oneepcBaseUrl)}</td></tr>`;
+    }
     return page(reply, req, "App status", html`<table><tbody>
 <tr><th>DRY_RUN</th><td>${s.dryRun ? "ON (the bot logs replies and sends nothing)" : "off (replies are sent)"} <span class="hint">as set in the server's environment; the worker is started with the same settings</span></td></tr>
 <tr><th>OneEPC base URL</th><td><code>${s.oneepcBaseUrl}</code></td></tr>
-<tr><th>OneEPC reachability</th><td>${reach}</td></tr>
+${oneepcRows}
 <tr><th>Zernio webhook secret configured</th><td>${yes(s.zernioWebhookConfigured)}</td></tr>
 <tr><th>Zernio API key configured</th><td>${yes(s.zernioApiKeyConfigured)}</td></tr>
 <tr><th>Database</th><td>${dbState}</td></tr>
@@ -511,6 +529,11 @@ ${auditTable(auditRows.rows.map((a) => ({ ...a, shop_name: null })), false)}`;
     return page(reply, req, "Audit log", html`${auditTable(r.rows, true)}<p class="muted">Latest 200 entries. Times in Asia/Riyadh.</p>`);
   });
 };
+
+function checkLabel(c: OneEpcCheck): Raw {
+  const word = { ok: "OK", auth_failed: "AUTH FAILED", not_configured: "not configured", unreachable: "NOT reachable", error: "ERROR" }[c.state];
+  return html`<strong>${word}</strong> <span class="hint">${c.detail}</span>`;
+}
 
 function auditTable(rows: { at: Date; actor: string; action: string; details: unknown; shop_name: string | null }[], withShop: boolean): Raw {
   if (!rows.length) return html`<p class="muted">Nothing yet.</p>`;

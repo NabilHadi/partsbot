@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import PgBoss from "pg-boss";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db/pool.js";
+import { checkOneEpc, oneEpcRoutingFromConfig } from "./oneepc/index.js";
 import { createPgBossInboundQueue } from "./queue/inbound.js";
 import { QUEUES } from "./queues.js";
 import { buildServer, type ServerDeps } from "./server.js";
@@ -10,6 +11,7 @@ import { createPgDedupeStore } from "./zernio/dedupe.js";
 
 const config = loadConfig();
 const db = createPool(config.DATABASE_URL);
+const oneepc = oneEpcRoutingFromConfig(config);
 
 // The webhook route needs the shared secret; without it the route is simply not mounted (Zernio would get 404s).
 let boss: PgBoss | undefined;
@@ -46,9 +48,15 @@ const app = buildServer({
   admin: {
     db,
     password: config.ADMIN_PASSWORD,
+    oneepcCheck: async () => {
+      const [real, mock] = await Promise.all([checkOneEpc(oneepc.real), oneepc.mock ? checkOneEpc(oneepc.mock) : Promise.resolve(null)]);
+      return { real, mock };
+    },
     status: {
       dryRun: config.DRY_RUN,
       oneepcBaseUrl: config.ONEEPC_BASE_URL,
+      oneepcSources: oneepc.sources,
+      oneepcMockBaseUrl: config.ONEEPC_MOCK_BASE_URL ?? null,
       zernioWebhookConfigured: !!config.ZERNIO_WEBHOOK_SECRET,
       zernioApiKeyConfigured: !!config.ZERNIO_API_KEY,
       version: pkg.version,

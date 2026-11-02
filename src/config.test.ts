@@ -5,7 +5,9 @@ describe("loadConfig", () => {
   it("parses a valid env and applies defaults", () => {
     const cfg = loadConfig({ DATABASE_URL: "postgres://x", ONEEPC_API_KEY: "k" });
     expect(cfg.PORT).toBe(3000);
-    expect(cfg.ONEEPC_BASE_URL).toContain("/api/bot/v1");
+    expect(cfg.ONEEPC_BASE_URL).toBe("https://oneepc.com/api/bot/v1");
+    expect(cfg.ONEEPC_DECODE_SOURCE).toBe("real");
+    expect(cfg.ONEEPC_SEARCH_SOURCE).toBe("real");
   });
 
   it("throws a readable error when required vars are missing", () => {

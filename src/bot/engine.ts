@@ -257,7 +257,7 @@ function failOneEpc(t: Turn, err: unknown, endpoint: "decode" | "search"): void 
         t.s.step = "awaiting_part";
         return t.say("noResults");
       default: {
-        const critical = err.code === "invalid_key" || err.code === "key_revoked";
+        const critical = err.code === "invalid_key" || err.code === "key_revoked" || err.code === "catalog_unavailable";
         t.actions.push({
           type: "alert",
           severity: critical ? "critical" : "warning",

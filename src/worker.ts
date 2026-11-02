@@ -1,7 +1,7 @@
 import PgBoss from "pg-boss";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db/pool.js";
-import { OneEpcClient } from "./oneepc/index.js";
+import { oneEpcRoutingFromConfig } from "./oneepc/index.js";
 import { QUEUES } from "./queues.js";
 import { PgBotStore } from "./bot/store.js";
 import { PgStockSource } from "./inventory/stock.js";
@@ -20,7 +20,8 @@ if (!dryRun) {
 const db = createPool(config.DATABASE_URL);
 const store = new PgBotStore(db);
 const stock = new PgStockSource(db);
-const oneepc = new OneEpcClient({ baseUrl: config.ONEEPC_BASE_URL, apiKey: config.ONEEPC_API_KEY });
+// decode/search go to the real API or the mock per ONEEPC_*_SOURCE; mock is served to test shops only.
+const oneepc = oneEpcRoutingFromConfig(config);
 
 const boss = new PgBoss({ connectionString: config.DATABASE_URL });
 boss.on("error", (err) => console.error("pg-boss error", err));
@@ -31,11 +32,11 @@ await boss.createQueue(QUEUES.inboundMessage);
 await boss.work<InboundMessageJob>(QUEUES.inboundMessage, async (jobs) => {
   for (const job of jobs) {
     // Ids only in logs: job.data holds customer message text and phone numbers (PDPL).
-    const outcome = await processInboundJob(job.data, { store, oneepc, sender, dryRun, stock, allowSyntheticStockEnv: config.ALLOW_SYNTHETIC_STOCK });
+    const outcome = await processInboundJob(job.data, { store, oneepc: oneepc.forShop({ testShop: false }), oneepcFor: (shop) => oneepc.forShop(shop), sender, dryRun, stock, allowSyntheticStockEnv: config.ALLOW_SYNTHETIC_STOCK });
     console.log(JSON.stringify({ event: "job_done", jobId: job.id, outcome }));
   }
 });
-console.log(JSON.stringify({ event: "worker_started", dryRun }));
+console.log(JSON.stringify({ event: "worker_started", dryRun, oneepcSources: oneepc.sources, oneepcRealKey: oneepc.real !== null, oneepcMock: oneepc.mock !== null }));
 
 const shutdown = async () => {
   await boss.stop({ graceful: true });

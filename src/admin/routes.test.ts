@@ -41,6 +41,22 @@ async function loggedIn(a: ReturnType<typeof app>["a"]) {
 }
 
 describe("/admin auth", () => {
+  it("app page shows OneEPC status, key state and per-endpoint routing (never the key)", async () => {
+    const f = fakeDb();
+    const a = buildServer({ logger: false, admin: { db: f.db, password: PW, status: { ...STATUS, oneepcSources: { decode: "mock", search: "mock" }, oneepcMockBaseUrl: "http://localhost:4010/api/bot/v1" },
+      oneepcCheck: async () => ({ real: { state: "ok", detail: "api 1.0, data version 5700aec61fe9, brands: toyota" }, mock: { state: "ok", detail: "api 1.0" } }) } });
+    const { page } = await loggedIn(a);
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain("OneEPC status");
+    expect(page.body).toContain("<strong>OK</strong>");
+    expect(page.body).toContain("configured, accepted");
+    expect(page.body).toContain("test shops only");
+    const b = buildServer({ logger: false, admin: { db: f.db, password: PW, status: STATUS, oneepcCheck: async () => ({ real: { state: "auth_failed", detail: "HTTP 401 invalid_key" }, mock: null }) } });
+    const { page: p2 } = await loggedIn(b);
+    expect(p2.body).toContain("AUTH FAILED");
+    expect(p2.body).toContain("REJECTED by OneEPC");
+  });
+
   it("fails closed with 503 on every admin URL when ADMIN_PASSWORD is unset", async () => {
     const { a } = app(undefined);
     for (const url of ["/admin", "/admin/", "/admin/login", "/admin/shops", "/admin/app", "/admin/admin.css"]) {

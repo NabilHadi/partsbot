@@ -5,6 +5,7 @@ import { normalizePartNumber, splitOem } from "../inventory/normalize.js";
 import { STOCK_TEST_VIN } from "../mock/stock-test-fixtures.js";
 import { InMemoryBotStore } from "./store.js";
 import { startMock, failing } from "./testkit.js";
+import { OneEpcRouting } from "../oneepc/routing.js";
 import { processInboundJob, type LogFields, type ReplySender } from "./worker-handler.js";
 
 let mock: Awaited<ReturnType<typeof startMock>>;
@@ -125,6 +126,23 @@ describe("processInboundJob", () => {
     expect(sent[0]?.body).not.toContain("SECRET-UPSTREAM-TEXT");
     expect(logs.some((l) => l.event === "alert")).toBe(true);
     expect(JSON.stringify(logs)).not.toContain("SECRET-UPSTREAM-TEXT");
+  });
+
+  it("mock-routed catalog: a test shop gets mock results, a real shop gets a handoff and never a mock part number", async () => {
+    const routing = new OneEpcRouting({ real: null, mock: mock.client, sources: { decode: "mock", search: "mock" } });
+    const run = async (shopConfig: unknown) => {
+      const { deps, sent, logs } = setup({ shopConfig });
+      const d = { ...deps, oneepcFor: (shop: { testShop: boolean }) => routing.forShop(shop) };
+      await processInboundJob(job("m1", "ابغى فلتر زيت"), d);
+      await processInboundJob(job("m2", "TESTLC20220000001"), d);
+      return { sent, logs };
+    };
+    const test = await run({ testShop: true });
+    expect(test.sent[1]?.body).toContain("00000-EXAMPLE4");
+    const real = await run({});
+    expect(real.sent.map((m) => m.body).join("\n")).not.toMatch(/EXAMPLE/);
+    expect(real.logs.some((l) => l.event === "alert" && l.fields.code === "oneepc_catalog_unavailable" && l.fields.severity === "critical")).toBe(true);
+    expect(real.logs.some((l) => l.event === "handoff")).toBe(true);
   });
 
   it("PDPL: logs never contain message text or the phone number", async () => {

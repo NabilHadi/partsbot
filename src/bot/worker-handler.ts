@@ -22,6 +22,8 @@ export type LogFields = Record<string, string | number | boolean | null | undefi
 export interface WorkerHandlerDeps {
   store: BotStore;
   oneepc: OneEpcLike;
+  /** Per-shop catalog client (real vs mock routing). When set, it wins over `oneepc`. */
+  oneepcFor?: (shop: { testShop: boolean }) => OneEpcLike;
   /** Null is allowed only with dryRun. */
   sender: ReplySender | null;
   dryRun: boolean;
@@ -94,7 +96,8 @@ export async function processInboundJob(job: InboundMessageJob, deps: WorkerHand
       envAllowSynthetic: deps.allowSyntheticStockEnv === true,
     });
     const stock = deps.stock ? createStockLookup(deps.stock, shop.id, allowSynthetic) : undefined;
-    const result = await handleInbound(state, job.text, { oneepc: deps.oneepc, now, shop: shopConfig, botMessagesToday, stock, allowSyntheticStock: allowSynthetic });
+    const oneepc = deps.oneepcFor ? deps.oneepcFor({ testShop: shopConfig.testShop }) : deps.oneepc;
+    const result = await handleInbound(state, job.text, { oneepc, now, shop: shopConfig, botMessagesToday, stock, allowSyntheticStock: allowSynthetic });
     result.newState.lastMessageId = job.providerMessageId;
 
     logActions(log, ids, result.actions);

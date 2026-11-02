@@ -4,7 +4,9 @@ import {
   decodeResponseSchema,
   errorEnvelopeSchema,
   searchResponseSchema,
+  statusResponseSchema,
   type DecodeResponse,
+  type StatusResponse,
   type Lang,
   type SearchResponse,
 } from "./types.js";
@@ -59,6 +61,11 @@ export class OneEpcClient {
     this.maxAttempts = opts.maxAttempts ?? 3;
     this.backoffBaseMs = opts.backoffBaseMs ?? 250;
     this.maxRetryAfterMs = opts.maxRetryAfterMs ?? 30_000;
+  }
+
+  /** GET /status: liveness + auth check (needs a valid key; 401 invalid_key otherwise). No retries beyond the usual. */
+  getStatus(): Promise<OneEpcResult<StatusResponse>> {
+    return this.get("/status", {}, statusResponseSchema);
   }
 
   /** Decode a VIN. `match` is exact | ambiguous | none; 404/422/400 throw OneEpcError. */
