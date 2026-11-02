@@ -8,6 +8,6 @@ describe("pg-boss inbound queue", () => {
     const send = vi.fn().mockResolvedValue("job-1");
     const q = createPgBossInboundQueue({ send } as never);
     await q.enqueue({} as never, "zernio:wamid.X");
-    expect(send.mock.calls[0][2]).toMatchObject({ singletonKey: "zernio:wamid.X", singletonSeconds: SINGLETON_SECONDS });
+    expect(send.mock.calls[0]?.[2]).toMatchObject({ singletonKey: "zernio:wamid.X", singletonSeconds: SINGLETON_SECONDS });
   });
 });

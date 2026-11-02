@@ -4,6 +4,7 @@ import { createPool } from "./db/pool.js";
 import { OneEpcClient } from "./oneepc/index.js";
 import { QUEUES } from "./queues.js";
 import { PgBotStore } from "./bot/store.js";
+import { PgStockSource } from "./inventory/stock.js";
 import { processInboundJob, type ReplySender } from "./bot/worker-handler.js";
 import { createZernioSender } from "./zernio/send.js";
 import type { InboundMessageJob } from "./zernio/types.js";
@@ -18,6 +19,7 @@ if (!dryRun) {
 
 const db = createPool(config.DATABASE_URL);
 const store = new PgBotStore(db);
+const stock = new PgStockSource(db);
 const oneepc = new OneEpcClient({ baseUrl: config.ONEEPC_BASE_URL, apiKey: config.ONEEPC_API_KEY });
 
 const boss = new PgBoss({ connectionString: config.DATABASE_URL });
@@ -29,7 +31,7 @@ await boss.createQueue(QUEUES.inboundMessage);
 await boss.work<InboundMessageJob>(QUEUES.inboundMessage, async (jobs) => {
   for (const job of jobs) {
     // Ids only in logs: job.data holds customer message text and phone numbers (PDPL).
-    const outcome = await processInboundJob(job.data, { store, oneepc, sender, dryRun });
+    const outcome = await processInboundJob(job.data, { store, oneepc, sender, dryRun, stock, allowSyntheticStockEnv: config.ALLOW_SYNTHETIC_STOCK });
     console.log(JSON.stringify({ event: "job_done", jobId: job.id, outcome }));
   }
 });

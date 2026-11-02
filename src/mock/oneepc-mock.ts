@@ -14,6 +14,12 @@ import {
   SUPPORTED_BRANDS,
   VIN_FIXTURES,
 } from "./fixtures.js";
+// TEST FIXTURE: fake Camry with real Medrar numbers, to exercise the stock lookup (see stock-test-fixtures.ts).
+import { STOCK_TEST_PARTS, STOCK_TEST_VIN, stockTestCamry } from "./stock-test-fixtures.js";
+
+const ALL_PARTS = [...PARTS, ...STOCK_TEST_PARTS];
+const ALL_VEHICLE_IDS: ReadonlySet<string> = new Set([...KNOWN_VEHICLE_IDS, stockTestCamry.vehicle_id]);
+const ALL_VINS: typeof VIN_FIXTURES = { ...VIN_FIXTURES, [STOCK_TEST_VIN]: { kind: "exact", vehicle: stockTestCamry } };
 import type { PartResult, SearchAmbiguity } from "../oneepc/types.js";
 
 export const BASE_PATH = "/api/bot/v1";
@@ -67,7 +73,7 @@ export function buildMockServer(opts: MockOptions = {}): FastifyInstance {
         if (vin.length !== 17 || !/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) {
           return sendError(reply, 400, "invalid_vin", "VIN must be 17 characters (letters and digits, no I, O or Q)");
         }
-        const fx = VIN_FIXTURES[vin];
+        const fx = ALL_VINS[vin];
         if (!fx) return sendError(reply, 404, "vin_not_found", "No vehicle found for this VIN");
         if (fx.kind === "unsupported") {
           return sendError(
@@ -100,7 +106,7 @@ export function buildMockServer(opts: MockOptions = {}): FastifyInstance {
         if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
           return sendError(reply, 400, "invalid_param", "limit must be an integer between 1 and 20");
         }
-        if (!KNOWN_VEHICLE_IDS.has(vehicle_id)) {
+        if (!ALL_VEHICLE_IDS.has(vehicle_id)) {
           return sendError(reply, 404, "vehicle_not_found", "Unknown or expired vehicle_id");
         }
 
@@ -109,7 +115,7 @@ export function buildMockServer(opts: MockOptions = {}): FastifyInstance {
           .split(/\s+/)
           .filter(Boolean)
           .map((t) => (t.length > 3 ? t.replace(/^ال/, "") : t));
-        const scored = PARTS.flatMap((p) => {
+        const scored = ALL_PARTS.flatMap((p) => {
           const fitment = p.fitment[vehicle_id];
           if (!fitment) return [];
           if (category && p.category.id !== category) return [];

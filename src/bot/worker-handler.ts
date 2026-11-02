@@ -10,6 +10,7 @@ import type { SendOptions, SendTarget } from "../zernio/send.js";
 import { handleInbound, type BotAction, type OneEpcLike } from "./engine.js";
 import { parseShopConfig, localTime } from "./shop-config.js";
 import { STATE_RETENTION_DAYS, type BotStore } from "./store.js";
+import { createStockLookup, syntheticAllowed, type StockSource } from "../inventory/stock.js";
 
 /** The slice of ZernioSender we use. */
 export interface ReplySender {
@@ -24,6 +25,10 @@ export interface WorkerHandlerDeps {
   /** Null is allowed only with dryRun. */
   sender: ReplySender | null;
   dryRun: boolean;
+  /** Shop stock (inventory_items). Absent = replies never mention stock. */
+  stock?: StockSource;
+  /** Env ALLOW_SYNTHETIC_STOCK=true: a test shop may see synthetic stock. Never applies to a real shop. */
+  allowSyntheticStockEnv?: boolean;
   now?: () => Date;
   log?: (event: string, fields?: LogFields) => void;
 }
@@ -74,7 +79,13 @@ export async function processInboundJob(job: InboundMessageJob, deps: WorkerHand
     }
 
     const botMessagesToday = await deps.store.getBotMessagesToday(shop.id, dayKey);
-    const result = await handleInbound(state, job.text, { oneepc: deps.oneepc, now, shop: shopConfig, botMessagesToday });
+    const allowSynthetic = syntheticAllowed({
+      testShop: shopConfig.testShop,
+      allowSyntheticStock: shopConfig.allowSyntheticStock,
+      envAllowSynthetic: deps.allowSyntheticStockEnv === true,
+    });
+    const stock = deps.stock ? createStockLookup(deps.stock, shop.id, allowSynthetic) : undefined;
+    const result = await handleInbound(state, job.text, { oneepc: deps.oneepc, now, shop: shopConfig, botMessagesToday, stock, allowSyntheticStock: allowSynthetic });
     result.newState.lastMessageId = job.providerMessageId;
 
     logActions(log, ids, result.actions);

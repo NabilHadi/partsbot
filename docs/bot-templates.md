@@ -112,7 +112,7 @@ Sample values are fake. Prices are never mentioned. At most ONE message is sent 
 **ar:**
 > حسب الكتالوج، رقم القطعة لسيارتك:
 > • فلتر زيت: 00000-EXAMPLE4
-> الموظف يأكد لك التوفر.
+> الموظف يؤكد لك التوفر.
 > وإذا السيارة مو صحيحة رد بـ لا. وتبي قطعة ثانية؟ اكتبها لي.
 
 **en:**

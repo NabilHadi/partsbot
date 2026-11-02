@@ -21,7 +21,7 @@ _Mock vehicle: TESTHY… = Hyundai Tucson. The customer says Camry in message 1:
 > 
 > حسب الكتالوج، رقم القطعة لسيارتك:
 > • فحمات فرامل أمامية: 00000-EXAMPLE3
-> الموظف يأكد لك التوفر.
+> الموظف يؤكد لك التوفر.
 > وإذا السيارة مو صحيحة رد بـ لا. وتبي قطعة ثانية؟ اكتبها لي.
 
 **Customer:**
@@ -54,7 +54,7 @@ _Oil filter: the API also returns the air filter at 0.5 and the bot does not quo
 > 
 > حسب الكتالوج، رقم القطعة لسيارتك:
 > • فلتر زيت: 00000-EXAMPLE4
-> الموظف يأكد لك التوفر.
+> الموظف يؤكد لك التوفر.
 > وإذا السيارة مو صحيحة رد بـ لا. وتبي قطعة ثانية؟ اكتبها لي.
 
 **Customer:**
@@ -63,7 +63,7 @@ _Oil filter: the API also returns the air filter at 0.5 and the bot does not quo
 **Bot:**
 > حسب الكتالوج، رقم القطعة لسيارتك:
 > • Filter, air cleaner: 00000-EXAMPLE6
-> الموظف يأكد لك التوفر.
+> الموظف يؤكد لك التوفر.
 > تبي قطعة ثانية؟ اكتبها لي.
 
 **Customer:**
@@ -105,7 +105,7 @@ _The bot never picks a variant by itself._
 > 
 > حسب الكتالوج، رقم القطعة لسيارتك:
 > • فلتر زيت: 00000-EXAMPLE4
-> الموظف يأكد لك التوفر.
+> الموظف يؤكد لك التوفر.
 > تبي قطعة ثانية؟ اكتبها لي.
 
 ---
@@ -142,7 +142,7 @@ _The bot never picks a variant by itself._
 **Bot:**
 > حسب الكتالوج، رقم القطعة لسيارتك:
 > • فلتر زيت: 00000-EXAMPLE4
-> الموظف يأكد لك التوفر.
+> الموظف يؤكد لك التوفر.
 > تبي قطعة ثانية؟ اكتبها لي.
 
 ---
@@ -159,7 +159,7 @@ _No prices at all in this step. The price word is dropped from the search text; 
 > 
 > حسب الكتالوج، رقم القطعة لسيارتك:
 > • فلتر زيت: 00000-EXAMPLE4
-> الموظف يأكد لك التوفر.
+> الموظف يؤكد لك التوفر.
 > وإذا السيارة مو صحيحة رد بـ لا. وتبي قطعة ثانية؟ اكتبها لي.
 
 **Customer:**

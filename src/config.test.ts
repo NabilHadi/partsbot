@@ -18,4 +18,11 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, ZERNIO_WEBHOOK_SECRET: "0123456789abcdef" }).ZERNIO_WEBHOOK_SECRET).toBe("0123456789abcdef");
     expect(() => loadConfig({ ...base, ZERNIO_WEBHOOK_SECRET: "short" })).toThrow(/ZERNIO_WEBHOOK_SECRET/);
   });
+
+  it("ALLOW_SYNTHETIC_STOCK is on only for the exact string 'true'", () => {
+    const base = { DATABASE_URL: "postgres://x", ONEEPC_API_KEY: "k" };
+    expect(loadConfig(base).ALLOW_SYNTHETIC_STOCK).toBe(false);
+    expect(loadConfig({ ...base, ALLOW_SYNTHETIC_STOCK: "true" }).ALLOW_SYNTHETIC_STOCK).toBe(true);
+    expect(loadConfig({ ...base, ALLOW_SYNTHETIC_STOCK: "1" }).ALLOW_SYNTHETIC_STOCK).toBe(false);
+  });
 });

@@ -11,7 +11,9 @@
  *  2. Conditional / unknown / ambiguous results are never presented as fitting: we ask the API's own Arabic
  *     question_hint, or say "يرجى التأكيد مع الموظف".
  *  3. Any OneEPC failure -> a safe "staff will follow up" reply, a handoff and an alert. No raw error text to the customer.
- *  4. No prices, no stock (not in this step).
+ *  4. Stock / price only from the shop's imported list via `deps.stock`, keyed by the quoted OneEPC number;
+ *     variants are shown by label + suffix code (no new part numbers). Price only with priceQuotingEnabled.
+ *     Synthetic stock only when `allowSyntheticStock` (test shop + opt-in); a lookup failure = no stock + alert.
  *  5. At the daily cap: ONE final handoff message, then silence.
  */
 import { OneEpcError } from "../oneepc/errors.js";
@@ -19,7 +21,8 @@ import type { DecodeResponse, PartResult, SearchResponse, Vehicle, VehicleCandid
 import type { OneEpcResult, SearchPartsParams } from "../oneepc/client.js";
 import { PartNumberGuardError, assertOnlyAllowedPartNumbers } from "./guard.js";
 import { parseMessage, parseVariantChoice, type Lang, type ParsedMessage } from "./intent.js";
-import { T, render, staffFollowUp, type PartLine, type TemplateName } from "./arabic.js";
+import { T, render, staffFollowUp, type PartLine, type PartStockView, type StockFooter, type StockQtyView, type TemplateName } from "./arabic.js";
+import type { PartStock, StockEntry, StockLookup } from "../inventory/stock.js";
 import { localTime, staffAvailability, type ShopConfig } from "./shop-config.js";
 import { isExpired, newState, resetState, vehicleDisplayName, type ConversationState, type VehicleRef } from "./state.js";
 
@@ -35,6 +38,10 @@ export interface EngineDeps {
   shop: ShopConfig;
   /** Bot messages already sent today (Asia/Riyadh) for this shop, from the usage counter. */
   botMessagesToday: number;
+  /** Shop stock lookup, bound to this shop. Absent = never mention stock. */
+  stock?: StockLookup;
+  /** Must be true for any synthetic stock to be shown (test shop that opted in). Default false. */
+  allowSyntheticStock?: boolean;
 }
 
 export type HandoffReason =
@@ -120,6 +127,60 @@ const pickQuestion = (q: { ar: string | null; en: string | null } | null | undef
 /** Strings from API vehicle data that may legitimately look like codes (trim "GXR-2", engine "2UR-FE"): not part numbers. */
 function vehicleTokens(v: VehicleRef | null, cands: VehicleRef[]): string[] {
   return [v, ...cands].flatMap((x) => (x ? [x.trim, x.engine, x.transmission, x.market, x.productionDate, x.make, x.modelEn, x.modelAr] : [])).filter((s): s is string => !!s);
+}
+
+// ------------------------------------------------------------------ stock
+
+const DAY_MS = 24 * 3600 * 1000;
+
+function qtyView(e: StockEntry, showPrice: boolean): StockQtyView {
+  return { qty: e.qty, priceSar: showPrice ? e.priceSar : null };
+}
+
+/**
+ * Stock lines for the quoted numbers (same single reply). Never throws: a failed lookup means "no stock rows"
+ * plus an ops alert. Synthetic data is dropped here too unless explicitly allowed.
+ */
+async function stockForQuote(t: Turn, partNumbers: string[]): Promise<{ views: Map<string, PartStockView>; footer: StockFooter | null }> {
+  const views = new Map<string, PartStockView>();
+  const { stock, shop, now, allowSyntheticStock } = t.deps;
+  if (!stock || partNumbers.length === 0) return { views, footer: null };
+  let found: Map<string, PartStock>;
+  try {
+    found = await stock(partNumbers);
+  } catch (err) {
+    t.actions.push({ type: "alert", severity: "warning", code: "stock_lookup_failed", detail: `error=${(err as Error)?.name ?? "unknown"}` });
+    return { views, footer: null };
+  }
+  const usable = [...found.entries()].filter(([, ps]) => allowSyntheticStock === true || !ps.synthetic);
+  if (usable.length === 0) return { views, footer: null };
+
+  const oldest = Math.min(...usable.map(([, ps]) => ps.importedAt.getTime()));
+  const stale = now().getTime() - oldest > shop.stockStaleDays * DAY_MS;
+  const footer: StockFooter = {
+    asOf: localTime(new Date(oldest), shop.businessHours.timezone).dateKey,
+    stale,
+    synthetic: usable.some(([, ps]) => ps.synthetic),
+    pricesShown: false,
+  };
+  if (stale) return { views, footer }; // old data: date + "staff confirm", no quantities
+  const showPrice = shop.priceQuotingEnabled;
+  for (const [pn, ps] of usable) {
+    const view: PartStockView = {
+      exact: ps.exact ? qtyView(ps.exact, showPrice) : null,
+      variants: ps.variants.map((v) => ({
+        ...qtyView(v, showPrice),
+        kind: v.suffixInfo.kind,
+        code: v.suffix,
+        labelAr: v.suffixInfo.labelAr,
+        labelEn: v.suffixInfo.labelEn,
+        unconfirmed: v.suffixInfo.unconfirmed,
+      })),
+    };
+    if ([view.exact, ...view.variants].some((q) => q && q.priceSar !== null)) footer.pricesShown = true;
+    views.set(pn, view);
+  }
+  return { views, footer };
 }
 
 // ------------------------------------------------------------------ one turn
@@ -291,13 +352,17 @@ async function runSearch(t: Turn, query: string, clarifyRounds: number, previous
   const confirmed = results.filter((r) => r.fitment.status === "confirmed");
   if (confirmed.length > 0) {
     const shown = confirmed.slice(0, deps.shop.maxPartsPerReply);
-    const items: PartLine[] = shown.map((r) => ({ name: partName(r, t.lang), partNumber: r.part_number }));
+    const { views, footer } = await stockForQuote(t, shown.map((r) => r.part_number));
+    const items: PartLine[] = shown.map((r) => {
+      const stock = views.get(r.part_number);
+      return { name: partName(r, t.lang), partNumber: r.part_number, ...(stock ? { stock } : {}) };
+    });
     shown.forEach((r) => t.quotable.add(r.part_number));
     s.step = "awaiting_part";
     s.pendingPart = null;
     s.clarification = null;
     s.counters.failedSearches = 0;
-    t.say("partsQuoted", { items, staffNote: results.length > confirmed.length, askAck: !vehicle.acknowledged });
+    t.say("partsQuoted", { items, staffNote: results.length > confirmed.length, askAck: !vehicle.acknowledged, stock: footer });
     return;
   }
 

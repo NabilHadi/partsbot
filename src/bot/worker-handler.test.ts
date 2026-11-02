@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { InboundMessageJob } from "../zernio/types.js";
+import { InMemoryStockSource } from "../inventory/stock.js";
+import { normalizePartNumber, splitOem } from "../inventory/normalize.js";
+import { STOCK_TEST_VIN } from "../mock/stock-test-fixtures.js";
 import { InMemoryBotStore } from "./store.js";
 import { startMock, failing } from "./testkit.js";
 import { processInboundJob, type LogFields, type ReplySender } from "./worker-handler.js";
@@ -133,5 +136,37 @@ describe("processInboundJob", () => {
     expect(all).not.toContain("TESTLC");
     expect(all).not.toContain(PHONE.slice(4));
     expect(all).not.toContain("EXAMPLE"); // not even the reply body
+  });
+});
+
+describe("processInboundJob: synthetic stock policy", () => {
+  const synRow = {
+    shopId: "shop_1", partNumberRaw: "04465-06090", partNumberNormalized: normalizePartNumber("04465-06090"),
+    oemBase: splitOem("04465-06090").oemBase, variantSuffix: null, qty: 6, priceSar: 300, vatIncluded: true,
+    isSynthetic: true, active: true, importedAt: new Date("2026-10-25T08:00:00+03:00"),
+  };
+  const ask = `${STOCK_TEST_VIN} فحمات فرامل امامية`;
+  async function reply(shopConfig: unknown, env: boolean) {
+    const { deps, sent } = setup({ shopConfig });
+    await processInboundJob(job("s1", ask), { ...deps, stock: new InMemoryStockSource([synRow]), allowSyntheticStockEnv: env });
+    return sent.map((s) => s.body).join("\n");
+  }
+
+  it.each([
+    ["real shop, even with allowSyntheticStock and env", { allowSyntheticStock: true, priceQuotingEnabled: true }, true],
+    ["test shop without opt-in", { testShop: true, priceQuotingEnabled: true }, false],
+  ])("hidden: %s", async (_n, cfg, env) => {
+    const body = await reply(cfg, env);
+    expect(body).toContain("04465-06090");
+    expect(body).not.toMatch(/متوفر \(|ريال|تجريبية/);
+  });
+
+  it.each([
+    ["test shop + config opt-in", { testShop: true, allowSyntheticStock: true, priceQuotingEnabled: true }, false],
+    ["test shop + env opt-in", { testShop: true, priceQuotingEnabled: true }, true],
+  ])("shown and marked: %s", async (_n, cfg, env) => {
+    const body = await reply(cfg, env);
+    expect(body).toContain("متوفر (6) · 300 ريال");
+    expect(body).toContain("(بيانات تجريبية)");
   });
 });

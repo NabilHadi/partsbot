@@ -6,7 +6,10 @@
  *  - One message per turn: the engine joins pieces with a blank line, so keep each template self-contained.
  *  - No part number is ever typed here. Part numbers only enter a reply through `partsQuoted` items that
  *    come from OneEPC (and the runtime guard in guard.ts re-checks that).
- *  - No prices, no stock promises (this step has neither). "Staff will confirm" is the only promise.
+ *  - Stock and prices come only from the shop's own imported list (src/inventory), shown under the OneEPC
+ *    number as availability per variant (origin / brand label + the shop's suffix code, never a new number).
+ *    Prices only when the shop turned price quoting on. Every stock reply still ends with "staff confirm".
+ *    Synthetic (generated) stock is marked «(بيانات تجريبية)» and only ever reaches a test shop.
  *  - The exact wording «يرجى التأكيد مع الموظف» is used whenever fitment is not confirmed.
  *  - The bot never claims to be a person and only talks about car-parts enquiries.
  */
@@ -64,6 +67,78 @@ export function staffFollowUp(lang: Lang, cfg: Pick<ShopConfig, "staffHandoffNam
 export interface PartLine {
   name: string;
   partNumber: string;
+  /** The shop's stock for this number (absent = no row in the shop's list, or stock is stale). */
+  stock?: PartStockView;
+}
+
+export interface StockQtyView {
+  qty: number | null;
+  /** Already gated: null unless the shop quotes prices. */
+  priceSar: number | null;
+}
+
+export interface StockVariantView extends StockQtyView {
+  kind: "origin" | "brand" | "unknown" | "none";
+  /** The shop's suffix code as written ("J", "CH", "DENSO", "E"); short, never a full part number. */
+  code: string | null;
+  labelAr: string | null;
+  labelEn: string | null;
+  unconfirmed: boolean;
+}
+
+export interface PartStockView {
+  /** Same number as OneEPC (no suffix). Not called "genuine": the data does not say so. */
+  exact: StockQtyView | null;
+  variants: StockVariantView[];
+}
+
+export interface StockFooter {
+  /** Riyadh date of the stock import, YYYY-MM-DD. */
+  asOf: string;
+  stale: boolean;
+  synthetic: boolean;
+  /** At least one price is shown (adds the VAT note). */
+  pricesShown: boolean;
+}
+
+function qtyText(q: StockQtyView, lang: Lang): string {
+  const avail =
+    q.qty === null ? (lang === "ar" ? "الكمية غير محددة" : "quantity not listed")
+    : q.qty > 0 ? (lang === "ar" ? `متوفر (${q.qty})` : `in stock (${q.qty})`)
+    : lang === "ar" ? "غير متوفر حالياً" : "out of stock";
+  if (q.priceSar === null) return avail;
+  return lang === "ar" ? `${avail} · ${q.priceSar} ريال` : `${avail} · SAR ${q.priceSar}`;
+}
+
+function variantLabel(v: StockVariantView, lang: Lang): string {
+  if (v.kind === "origin") return `${lang === "ar" ? v.labelAr : v.labelEn} (${v.code})${v.unconfirmed ? (lang === "ar" ? " غير مؤكد" : " unconfirmed") : ""}`;
+  if (v.kind === "brand") return `${lang === "ar" ? v.labelAr : v.labelEn}${v.unconfirmed ? ` (${v.code}${lang === "ar" ? "، غير مؤكد" : ", unconfirmed"})` : ""}`;
+  return lang === "ar" ? `رمز ${v.code} (غير مؤكد)` : `code ${v.code} (unconfirmed)`;
+}
+
+function stockLines(item: PartLine, lang: Lang): string[] {
+  const s = item.stock;
+  if (!s) return [];
+  const out: string[] = [];
+  if (s.exact) out.push(lang === "ar" ? `  نفس الرقم: ${qtyText(s.exact, lang)}` : `  Same number: ${qtyText(s.exact, lang)}`);
+  if (s.variants.length > 0) {
+    out.push(lang === "ar" ? "  بدائل بنفس الرقم الأساسي:" : "  Variants of the same base number:");
+    for (const v of s.variants) out.push(`  - ${variantLabel(v, lang)}: ${qtyText(v, lang)}`);
+  }
+  return out;
+}
+
+function stockFooter(f: StockFooter | null, lang: Lang): string[] {
+  if (!f) return [lang === "ar" ? "الموظف يؤكد لك التوفر." : "Our staff will confirm availability."];
+  const out: string[] = [];
+  if (f.stale) {
+    out.push(lang === "ar" ? `بيانات المخزون قديمة (آخر تحديث ${f.asOf})، الموظف يؤكد لك التوفر.` : `Stock data is old (last update ${f.asOf}); our staff will confirm availability.`);
+  } else {
+    const vat = f.pricesShown ? (lang === "ar" ? " الأسعار شاملة الضريبة." : " Prices include VAT.") : "";
+    out.push(lang === "ar" ? `المخزون حسب تحديث ${f.asOf}.${vat} الموظف يؤكد لك التوفر.` : `Stock as of ${f.asOf}.${vat} Our staff will confirm availability.`);
+  }
+  if (f.synthetic) out.push(lang === "ar" ? "(بيانات تجريبية)" : "(test data)");
+  return out;
 }
 
 export const T = {
@@ -148,20 +223,20 @@ export const T = {
    * `staffNote` = some other results were not confirmed; `askAck` = remind them to say "no" if the car is wrong.
    */
   partsQuoted: {
-    ar: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean }) =>
+    ar: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean; stock?: StockFooter | null }) =>
       [
         p.items.length === 1 ? "حسب الكتالوج، رقم القطعة لسيارتك:" : "حسب الكتالوج، أرقام القطع لسيارتك:",
-        ...p.items.map((i) => `• ${i.name}: ${i.partNumber}`),
+        ...p.items.flatMap((i) => [`• ${i.name}: ${i.partNumber}`, ...stockLines(i, "ar")]),
         ...(p.staffNote ? [`وفيه نتائج ثانية ما تأكد تطابقها، ${CONFIRM_WITH_STAFF_AR}.`] : []),
-        "الموظف يأكد لك التوفر.",
+        ...stockFooter(p.stock ?? null, "ar"),
         ...(p.askAck ? ["وإذا السيارة مو صحيحة رد بـ لا. وتبي قطعة ثانية؟ اكتبها لي."] : ["تبي قطعة ثانية؟ اكتبها لي."]),
       ].join("\n"),
-    en: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean }) =>
+    en: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean; stock?: StockFooter | null }) =>
       [
         p.items.length === 1 ? "According to the catalogue, the part number for your car:" : "According to the catalogue, the part numbers for your car:",
-        ...p.items.map((i) => `• ${i.name}: ${i.partNumber}`),
+        ...p.items.flatMap((i) => [`• ${i.name}: ${i.partNumber}`, ...stockLines(i, "en")]),
         ...(p.staffNote ? [`Other results are not confirmed to fit. ${CONFIRM_WITH_STAFF_EN}.`] : []),
-        "Our staff will confirm availability.",
+        ...stockFooter(p.stock ?? null, "en"),
         ...(p.askAck ? ["If this isn't your car, reply no. Need another part? Just write it."] : ["Need another part? Just write it."]),
       ].join("\n"),
   },

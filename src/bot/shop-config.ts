@@ -36,8 +36,14 @@ export const DEFAULT_BUSINESS_HOURS: BusinessHours = {
 };
 
 export const shopConfigSchema = z.object({
-  /** Not used yet: this step never mentions prices, whatever the value. */
+  /** Show the shop's price next to stock lines (src/inventory). Off = availability only, never a price. */
   priceQuotingEnabled: z.boolean().default(false),
+  /** A test shop (Nabil's own number). Only a test shop may ever see synthetic stock. */
+  testShop: z.boolean().default(false),
+  /** Show SYNTHETIC stock rows (generated qty/price). Has no effect unless `testShop` is true. */
+  allowSyntheticStock: z.boolean().default(false),
+  /** Stock older than this many days is not shown; the reply says staff confirm availability (with the date). */
+  stockStaleDays: z.number().int().min(1).max(365).default(7),
   /** `auto` = answer in the script of the customer's last message (Arabic unless they write Latin letters). */
   language: z.enum(["ar", "en", "auto"]).default("auto"),
   /** Shown in the welcome line when set, e.g. "قطع غيار الأمل". Empty = omitted. */

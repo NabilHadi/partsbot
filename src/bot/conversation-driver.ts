@@ -2,7 +2,7 @@
  * Drives the engine for ONE chat in memory: keeps the state, the clock and the daily message counter.
  * Used by the tests, the transcript fixtures and the local chat REPL (npm run chat). No WhatsApp, no DB.
  */
-import { handleInbound, type BotAction, type EngineResult, type OneEpcLike } from "./engine.js";
+import { handleInbound, type BotAction, type EngineDeps, type EngineResult, type OneEpcLike } from "./engine.js";
 import { parseShopConfig, type ShopConfig } from "./shop-config.js";
 import type { ConversationState } from "./state.js";
 
@@ -19,6 +19,8 @@ export class Conversation {
   clock: Date;
   readonly turns: Turn[] = [];
   readonly allActions: BotAction[] = [];
+  /** Optional engine extras (stock lookup and its synthetic policy) for tests and the REPL. */
+  extras: Pick<EngineDeps, "stock" | "allowSyntheticStock"> = {};
   /** Part numbers the OneEPC fake/mock returned, collected by wrappers (optional, for the "no invented numbers" check). */
   constructor(
     private readonly oneepc: OneEpcLike,
@@ -37,6 +39,7 @@ export class Conversation {
       now: () => this.clock,
       shop: this.shop,
       botMessagesToday: this.botMessages,
+      ...this.extras,
     });
     this.state = result.newState;
     this.botMessages += result.replies.length;

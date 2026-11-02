@@ -16,6 +16,11 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => !["false", "0", "no"].includes((v ?? "").trim().toLowerCase())),
+  /** Lets a TEST shop (shops.config.testShop) see synthetic stock without allowSyntheticStock. Real shops: never. */
+  ALLOW_SYNTHETIC_STOCK: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? "").trim().toLowerCase() === "true"),
 });
 
 export type Config = z.infer<typeof envSchema>;
