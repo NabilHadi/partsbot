@@ -8,7 +8,7 @@
 import type { InboundMessageJob } from "../zernio/types.js";
 import type { SendOptions, SendTarget } from "../zernio/send.js";
 import { handleInbound, type BotAction, type OneEpcLike } from "./engine.js";
-import { parseShopConfig, localTime } from "./shop-config.js";
+import { shopConfigSchema, localTime } from "./shop-config.js";
 import { STATE_RETENTION_DAYS, type BotStore } from "./store.js";
 import { createStockLookup, syntheticAllowed, type StockSource } from "../inventory/stock.js";
 
@@ -39,7 +39,8 @@ export type JobOutcome =
   | "duplicate"
   | "skipped_standby"
   | "skipped_test"
-  | "skipped_no_shop";
+  | "skipped_no_shop"
+  | "skipped_bad_config";
 
 const defaultLog = (event: string, fields: LogFields = {}) =>
   console.log(JSON.stringify({ event, ...fields }));
@@ -65,7 +66,15 @@ export async function processInboundJob(job: InboundMessageJob, deps: WorkerHand
     log("job_skipped", { ...ids, reason: "no_shop_for_account", accountId: job.accountId });
     return "skipped_no_shop";
   }
-  const shopConfig = parseShopConfig(shop.config);
+  // The admin CLI validates before writing, so this only trips on a hand-edited row. Never guess settings
+  // (a default could show what the shop hid): no reply, an ops alert naming the bad keys (not their values).
+  const parsedConfig = shopConfigSchema.safeParse(shop.config ?? {});
+  if (!parsedConfig.success) {
+    const keys = [...new Set(parsedConfig.error.issues.map((i) => i.path.join(".") || "(root)"))].join(",");
+    log("alert", { ...ids, severity: "critical", code: "shop_config_invalid", detail: `shop=${shop.id} keys=${keys}` });
+    return "skipped_bad_config";
+  }
+  const shopConfig = parsedConfig.data;
 
   return deps.store.withLock(shop.id, job.conversationId, async () => {
     const at = now();
@@ -126,6 +135,10 @@ function logActions(log: NonNullable<WorkerHandlerDeps["log"]>, ids: LogFields, 
         break;
       case "customer_waiting":
         log("customer_waiting", ids);
+        break;
+      case "parts_identified":
+        // Part numbers are catalogue data (not personal data); logged even when hidden from the customer.
+        log("parts_identified", { ...ids, partNumbers: a.partNumbers.join(","), shownToCustomer: a.shownToCustomer });
         break;
       case "oneepc_call":
         log("oneepc_call", { ...ids, endpoint: a.endpoint, requestId: a.requestId, dataVersion: a.dataVersion, outcome: a.outcome });

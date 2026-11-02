@@ -312,9 +312,9 @@ describe("OneEPC errors -> safe handoff + alert", () => {
 });
 
 describe("English customer", () => {
-  it("replies in English, with the catalogue number", async () => {
+  it("replies in English, with the catalogue number (shop language: auto)", async () => {
     const rec = recording(mock.client);
-    const c = newConv(rec);
+    const c = newConv(rec, { language: "auto" });
     const r1 = await c.say("hi, I need front brake pads");
     expect(r1.newState.lang).toBe("en");
     expect(r1.replies[0]).toMatch(/VIN/);
@@ -325,8 +325,8 @@ describe("English customer", () => {
     expect(r2.replies[0]).not.toMatch(/[\u0600-\u06FF]/);
     expectOnlyApiNumbers(c, rec);
   });
-  it("English off-topic and staff request", async () => {
-    const c = newConv();
+  it("English off-topic and staff request (shop language: auto)", async () => {
+    const c = newConv(mock.client, { language: "auto" });
     const r = await c.say("what is the weather today");
     expect(r.replies[0]).toMatch(/car-parts/);
     const r2 = await c.say("I want to talk to a person");

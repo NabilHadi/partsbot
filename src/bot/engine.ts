@@ -15,15 +15,21 @@
  *     variants are shown by label + suffix code (no new part numbers). Price only with priceQuotingEnabled.
  *     Synthetic stock only when `allowSyntheticStock` (test shop + opt-in); a lookup failure = no stock + alert.
  *  5. At the daily cap: ONE final handoff message, then silence.
+ *  6. Per-shop display settings (shop-config.ts) decide what a confirmed quote shows: the part number
+ *     (`showPartNumbers`; hidden = name only, the number is logged as `parts_identified` and kept in state for
+ *     staff, and is NOT quotable so the guard blocks any leak), stock (`stockDisplay`), alternatives
+ *     (`showAlternatives`) and prices (`priceQuotingEnabled`).
+ *  7. Outside opening hours (`afterHoursMode`): one "closed now, staff follow up <when>" note per closed period,
+ *     either added to the normal reply or sent alone (then no lookup at all).
  */
 import { OneEpcError } from "../oneepc/errors.js";
 import type { DecodeResponse, PartResult, SearchResponse, Vehicle, VehicleCandidate } from "../oneepc/types.js";
 import type { OneEpcResult, SearchPartsParams } from "../oneepc/client.js";
 import { PartNumberGuardError, assertOnlyAllowedPartNumbers } from "./guard.js";
 import { parseMessage, parseVariantChoice, type Lang, type ParsedMessage } from "./intent.js";
-import { T, render, staffFollowUp, type PartLine, type PartStockView, type StockFooter, type StockQtyView, type TemplateName } from "./arabic.js";
+import { T, render, staffFollowUp, whenText, type PartLine, type PartStockView, type StockFooter, type StockQtyView, type TemplateName } from "./arabic.js";
 import type { PartStock, StockEntry, StockLookup } from "../inventory/stock.js";
-import { localTime, staffAvailability, type ShopConfig } from "./shop-config.js";
+import { closedPeriodKey, localTime, staffAvailability, type ShopConfig } from "./shop-config.js";
 import { isExpired, newState, resetState, vehicleDisplayName, type ConversationState, type VehicleRef } from "./state.js";
 
 /** Only the two OneEPC calls the bot needs; OneEpcClient satisfies this, so does a test fake. */
@@ -66,6 +72,8 @@ export type BotAction =
   | { type: "alert"; severity: "warning" | "critical"; code: string; detail: string }
   /** Customer wrote while the bot is silent (handoff / daily cap): staff should look at the chat. */
   | { type: "customer_waiting" }
+  /** Confirmed part numbers identified this turn (also when hidden from the customer), for logs and staff handoff. */
+  | { type: "parts_identified"; partNumbers: string[]; shownToCustomer: boolean }
   /** One line per OneEPC call, for logs (request id + data version only). */
   | { type: "oneepc_call"; endpoint: "decode" | "search"; requestId: string | null; dataVersion: string | null; outcome: string };
 
@@ -145,6 +153,8 @@ async function stockForQuote(t: Turn, partNumbers: string[]): Promise<{ views: M
   const views = new Map<string, PartStockView>();
   const { stock, shop, now, allowSyntheticStock } = t.deps;
   if (!stock || partNumbers.length === 0) return { views, footer: null };
+  // Nothing the shop lets us show (no stock line, no price): skip the lookup.
+  if (shop.stockDisplay === "hidden" && !shop.priceQuotingEnabled) return { views, footer: null };
   let found: Map<string, PartStock>;
   try {
     found = await stock(partNumbers);
@@ -162,13 +172,15 @@ async function stockForQuote(t: Turn, partNumbers: string[]): Promise<{ views: M
     stale,
     synthetic: usable.some(([, ps]) => ps.synthetic),
     pricesShown: false,
+    stockShown: shop.stockDisplay !== "hidden",
   };
   if (stale) return { views, footer }; // old data: date + "staff confirm", no quantities
   const showPrice = shop.priceQuotingEnabled;
   for (const [pn, ps] of usable) {
     const view: PartStockView = {
+      display: shop.stockDisplay,
       exact: ps.exact ? qtyView(ps.exact, showPrice) : null,
-      variants: ps.variants.map((v) => ({
+      variants: (shop.showAlternatives ? ps.variants : []).map((v) => ({
         ...qtyView(v, showPrice),
         kind: v.suffixInfo.kind,
         code: v.suffix,
@@ -177,9 +189,12 @@ async function stockForQuote(t: Turn, partNumbers: string[]): Promise<{ views: M
         unconfirmed: v.suffixInfo.unconfirmed,
       })),
     };
-    if ([view.exact, ...view.variants].some((q) => q && q.priceSar !== null)) footer.pricesShown = true;
+    const shown = [view.exact, ...view.variants].filter((q) => q !== null && (view.display !== "hidden" || q.priceSar !== null));
+    if (shown.length === 0) continue; // e.g. only alternatives in stock and alternatives are off
+    if (shown.some((q) => q && q.priceSar !== null)) footer.pricesShown = true;
     views.set(pn, view);
   }
+  if (views.size === 0) return { views, footer: null };
   return { views, footer };
 }
 
@@ -353,11 +368,15 @@ async function runSearch(t: Turn, query: string, clarifyRounds: number, previous
   if (confirmed.length > 0) {
     const shown = confirmed.slice(0, deps.shop.maxPartsPerReply);
     const { views, footer } = await stockForQuote(t, shown.map((r) => r.part_number));
+    const showNumbers = deps.shop.showPartNumbers;
     const items: PartLine[] = shown.map((r) => {
       const stock = views.get(r.part_number);
-      return { name: partName(r, t.lang), partNumber: r.part_number, ...(stock ? { stock } : {}) };
+      return { name: partName(r, t.lang), partNumber: showNumbers ? r.part_number : null, ...(stock ? { stock } : {}) };
     });
-    shown.forEach((r) => t.quotable.add(r.part_number));
+    // Hidden numbers are never quotable: if one slipped into the text the guard would block the reply.
+    if (showNumbers) shown.forEach((r) => t.quotable.add(r.part_number));
+    s.lastParts = shown.map((r) => r.part_number);
+    t.actions.push({ type: "parts_identified", partNumbers: s.lastParts, shownToCustomer: showNumbers });
     s.step = "awaiting_part";
     s.pendingPart = null;
     s.clarification = null;
@@ -542,6 +561,15 @@ async function decide(t: Turn, p: ParsedMessage | null, text: string, first: boo
     return t.handoff("daily_cap", "capReached");
   }
 
+  // After hours, note-only shops: one note per closed period, then wait silently for staff. No OneEPC call.
+  const closed = closedPeriodKey(deps.now(), deps.shop.businessHours);
+  if (closed && deps.shop.afterHoursMode === "note_only") {
+    t.actions.push({ type: "customer_waiting" });
+    if (s.afterHoursNoticeFor === closed) return void (t.silent = true);
+    s.afterHoursNoticeFor = closed;
+    return t.say("afterHoursOnly", { when: nextOpeningText(t), shopName: deps.shop.shopName });
+  }
+
   if (!p) return t.say("nonText");
   if (p.wantsRestart) {
     Object.assign(s, resetState(s, deps.now()));
@@ -565,8 +593,25 @@ async function decide(t: Turn, p: ParsedMessage | null, text: string, first: boo
   }
 }
 
+function nextOpeningText(t: Turn): string {
+  const a = staffAvailability(t.deps.now(), t.deps.shop.businessHours);
+  return !a.open && a.next ? whenText(t.lang, a.next) : "";
+}
+
+/** reply_with_note: add the closed-now note once per closed period; handoff replies already say when staff answer. */
+function addAfterHoursNote(t: Turn): void {
+  const { s, deps } = t;
+  if (deps.shop.afterHoursMode !== "reply_with_note" || t.segments.length === 0) return;
+  if (t.actions.some((a) => a.type === "handoff")) return;
+  const closed = closedPeriodKey(deps.now(), deps.shop.businessHours);
+  if (!closed || s.afterHoursNoticeFor === closed) return;
+  s.afterHoursNoticeFor = closed;
+  t.say("afterHoursNote", { when: nextOpeningText(t) });
+}
+
 function finalize(t: Turn, now: Date): EngineResult {
   const { s, deps } = t;
+  addAfterHoursNote(t);
   let reply = t.segments.join("\n\n");
   if (reply) {
     try {

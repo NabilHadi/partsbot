@@ -61,6 +61,10 @@ export const conversationStateSchema = z.object({
   handoffReason: z.string().nullable().default(null),
   /** Riyadh date (YYYY-MM-DD) on which the "daily cap reached" message was sent; silence afterwards that day. */
   capNotifiedDay: z.string().nullable().default(null),
+  /** Closed period ("<date> <next opening>") for which the after-hours note was already sent. */
+  afterHoursNoticeFor: z.string().nullable().default(null),
+  /** Part numbers of the last confirmed quote (also when hidden from the customer): for the staff handoff. */
+  lastParts: z.array(z.string()).max(10).default([]),
   /** Provider message id of the last inbound message handled (lets the worker skip a replayed job). */
   lastMessageId: z.string().nullable().default(null),
   updatedAt: z.string(),
@@ -93,6 +97,7 @@ export function resetState(state: ConversationState, now: Date): ConversationSta
   const fresh = newState(now, state.lang);
   fresh.capNotifiedDay = state.capNotifiedDay;
   fresh.lastMessageId = state.lastMessageId;
+  fresh.afterHoursNoticeFor = state.afterHoursNoticeFor;
   return fresh;
 }
 

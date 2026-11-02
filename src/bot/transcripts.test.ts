@@ -113,9 +113,9 @@ describe("Scenario transcripts", () => {
     for (const m of [`${"TESTNF00000000004"} فلتر زيت`, "فيه أحد؟"]) await unknown.say(m);
     md.push(unknown.toMarkdown("C. Unknown VIN: handoff, then silence"), "---", "");
 
-    const en = new Conversation(mock.client);
+    const en = new Conversation(mock.client, { language: "auto" });
     for (const m of ["hi, I need front brake pads", TUCSON]) await en.say(m);
-    md.push(en.toMarkdown("D. English customer"), "---", "");
+    md.push(en.toMarkdown("D. English customer (shop language: auto)"), "---", "");
 
     const err = new Conversation(failing(503, "upstream_unavailable"));
     await err.say(`${LC} فلتر زيت`);

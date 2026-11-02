@@ -61,7 +61,7 @@ _→ handoff to staff (unknown_vin)_
 
 ---
 
-## D. English customer
+## D. English customer (shop language: auto)
 
 **Customer:**
 > hi, I need front brake pads

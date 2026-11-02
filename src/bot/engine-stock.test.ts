@@ -25,9 +25,10 @@ function row(raw: string, qty: number | null, priceSar: number | null, extra: Pa
 }
 const PADS = [row("04465-06090", 3, 240), row("04465-06090-J", 2, 180), row("04465-06090-CH", 0, 95), row("04465-06090-E", 5, 120)];
 
+// These tests show exact counts (stockDisplay "quantity"); the other display modes are in engine-settings.test.ts.
 function conv(rows: (StockRow & { shopId: string })[], shop: Record<string, unknown> = {}, allowSynthetic = false) {
   const rec = recording(mock.client);
-  const c = new Conversation(rec, shop);
+  const c = new Conversation(rec, { stockDisplay: "quantity", ...shop });
   c.extras = { stock: createStockLookup(new InMemoryStockSource(rows), "shop_1", allowSynthetic), allowSyntheticStock: allowSynthetic };
   return { c, rec };
 }

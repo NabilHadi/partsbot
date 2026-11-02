@@ -18,7 +18,8 @@
     "typecheck": "tsc --noEmit",
     "chat": "tsx src/scripts/chat.ts",
     "templates": "tsx src/scripts/print-templates.ts > docs/bot-templates.md",
-    "import-stock": "tsx src/scripts/import-stock.ts"
+    "import-stock": "tsx src/scripts/import-stock.ts",
+    "shop": "tsx src/scripts/shop.ts"
   },
   "dependencies": {
     "@zernio/node": "0.2.1325",

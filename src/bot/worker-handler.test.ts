@@ -135,7 +135,9 @@ describe("processInboundJob", () => {
     expect(all).not.toContain("فلتر");
     expect(all).not.toContain("TESTLC");
     expect(all).not.toContain(PHONE.slice(4));
-    expect(all).not.toContain("EXAMPLE"); // not even the reply body
+    // Not even the reply body. The identified part numbers (catalogue data, not personal) are logged once, for staff.
+    const withPn = logs.filter((l) => JSON.stringify(l).includes("EXAMPLE"));
+    expect(withPn.map((l) => l.event)).toEqual(["parts_identified"]);
   });
 });
 
@@ -147,7 +149,7 @@ describe("processInboundJob: synthetic stock policy", () => {
   };
   const ask = `${STOCK_TEST_VIN} فحمات فرامل امامية`;
   async function reply(shopConfig: unknown, env: boolean) {
-    const { deps, sent } = setup({ shopConfig });
+    const { deps, sent } = setup({ shopConfig: { stockDisplay: "quantity", ...(shopConfig as object) } });
     await processInboundJob(job("s1", ask), { ...deps, stock: new InMemoryStockSource([synRow]), allowSyntheticStockEnv: env });
     return sent.map((s) => s.body).join("\n");
   }

@@ -13,7 +13,7 @@
  *  - The exact wording «يرجى التأكيد مع الموظف» is used whenever fitment is not confirmed.
  *  - The bot never claims to be a person and only talks about car-parts enquiries.
  */
-import type { Availability, ShopConfig, Weekday } from "./shop-config.js";
+import type { Availability, ShopConfig, StockDisplay, Weekday } from "./shop-config.js";
 import type { Lang } from "./intent.js";
 
 type Msg<P = void> = { ar: (p: P) => string; en: (p: P) => string };
@@ -36,9 +36,23 @@ function clock12(hhmm: string, lang: Lang): string {
   return `${h12}:${m} ${suffix}`;
 }
 
+type NextOpening = NonNullable<Extract<Availability, { open: false }>["next"]>;
+
+/** "بكرة الساعة 8:00 صباحاً" / "tomorrow at 8:00 AM": when staff are next in. */
+export function whenText(lang: Lang, next: NextOpening): string {
+  const { dayOffset, weekday, time } = next;
+  if (lang === "ar") {
+    const day = dayOffset === 0 ? "اليوم" : dayOffset === 1 ? "بكرة" : `يوم ${WEEKDAY_AR[weekday]}`;
+    return `${day} الساعة ${clock12(time, "ar")}`;
+  }
+  const day = dayOffset === 0 ? "today" : dayOffset === 1 ? "tomorrow" : `on ${WEEKDAY_EN[weekday]}`;
+  return `${day} at ${clock12(time, "en")}`;
+}
+
 /**
  * "When will staff answer?" fragment, built from the shop's business hours (Asia/Riyadh).
  * Intent: set an honest expectation, so the customer is not left wondering at midnight.
+ * Only the PUBLIC shop line (`staffHandoffPhone`) may appear; staff members' own numbers never do.
  */
 export function staffFollowUp(lang: Lang, cfg: Pick<ShopConfig, "staffHandoffName" | "staffHandoffPhone">, avail: Availability): string {
   const who = cfg.staffHandoffName || (lang === "ar" ? "الموظف" : "Our team");
@@ -49,14 +63,7 @@ export function staffFollowUp(lang: Lang, cfg: Pick<ShopConfig, "staffHandoffNam
   } else if (!avail.next) {
     line = lang === "ar" ? `${who} بيرد عليك بإذن الله.` : `${who} will get back to you.`;
   } else {
-    const { dayOffset, weekday, time } = avail.next;
-    if (lang === "ar") {
-      const day = dayOffset === 0 ? "اليوم" : dayOffset === 1 ? "بكرة" : `يوم ${WEEKDAY_AR[weekday]}`;
-      line = `${who} بيرد عليك ${day} الساعة ${clock12(time, "ar")} بإذن الله.`;
-    } else {
-      const day = dayOffset === 0 ? "today" : dayOffset === 1 ? "tomorrow" : `on ${WEEKDAY_EN[weekday]}`;
-      line = `${who} will reply ${day} at ${clock12(time, "en")}.`;
-    }
+    line = lang === "ar" ? `${who} بيرد عليك ${whenText("ar", avail.next)} بإذن الله.` : `${who} will reply ${whenText("en", avail.next)}.`;
   }
   if (phone) line += lang === "ar" ? ` للتواصل المباشر: ${phone}` : ` Direct line: ${phone}`;
   return line;
@@ -66,7 +73,8 @@ export function staffFollowUp(lang: Lang, cfg: Pick<ShopConfig, "staffHandoffNam
 
 export interface PartLine {
   name: string;
-  partNumber: string;
+  /** The OneEPC number, or null when the shop hides part numbers (then the part is identified by name only). */
+  partNumber: string | null;
   /** The shop's stock for this number (absent = no row in the shop's list, or stock is stale). */
   stock?: PartStockView;
 }
@@ -87,6 +95,8 @@ export interface StockVariantView extends StockQtyView {
 }
 
 export interface PartStockView {
+  /** How much the shop lets us say: `quantity` = exact count, `availability` = in/out only, `hidden` = price only (if any). */
+  display: StockDisplay;
   /** Same number as OneEPC (no suffix). Not called "genuine": the data does not say so. */
   exact: StockQtyView | null;
   variants: StockVariantView[];
@@ -99,33 +109,68 @@ export interface StockFooter {
   synthetic: boolean;
   /** At least one price is shown (adds the VAT note). */
   pricesShown: boolean;
+  /** Availability is shown (stockDisplay is not `hidden`). */
+  stockShown: boolean;
 }
 
-function qtyText(q: StockQtyView, lang: Lang): string {
-  const avail =
-    q.qty === null ? (lang === "ar" ? "الكمية غير محددة" : "quantity not listed")
-    : q.qty > 0 ? (lang === "ar" ? `متوفر (${q.qty})` : `in stock (${q.qty})`)
-    : lang === "ar" ? "غير متوفر حالياً" : "out of stock";
+function priceText(sar: number, lang: Lang): string {
+  return lang === "ar" ? `${sar} ريال` : `SAR ${sar}`;
+}
+
+/** One stock fragment, or null when there is nothing the shop allows us to say. */
+function qtyText(q: StockQtyView, display: StockDisplay, lang: Lang): string | null {
+  let avail: string | null;
+  if (display === "hidden") avail = null;
+  else if (q.qty === null) avail = lang === "ar" ? (display === "quantity" ? "الكمية غير محددة" : "التوفر غير محدد") : display === "quantity" ? "quantity not listed" : "availability not listed";
+  else if (q.qty > 0) avail = display === "quantity" ? (lang === "ar" ? `متوفر (${q.qty})` : `in stock (${q.qty})`) : lang === "ar" ? "متوفر" : "in stock";
+  else avail = lang === "ar" ? "غير متوفر حالياً" : "out of stock";
   if (q.priceSar === null) return avail;
-  return lang === "ar" ? `${avail} · ${q.priceSar} ريال` : `${avail} · SAR ${q.priceSar}`;
+  if (avail === null) return lang === "ar" ? `السعر ${priceText(q.priceSar, lang)}` : `price ${priceText(q.priceSar, lang)}`;
+  return `${avail} · ${priceText(q.priceSar, lang)}`;
 }
 
-function variantLabel(v: StockVariantView, lang: Lang): string {
-  if (v.kind === "origin") return `${lang === "ar" ? v.labelAr : v.labelEn} (${v.code})${v.unconfirmed ? (lang === "ar" ? " غير مؤكد" : " unconfirmed") : ""}`;
-  if (v.kind === "brand") return `${lang === "ar" ? v.labelAr : v.labelEn}${v.unconfirmed ? ` (${v.code}${lang === "ar" ? "، غير مؤكد" : ", unconfirmed"})` : ""}`;
-  return lang === "ar" ? `رمز ${v.code} (غير مؤكد)` : `code ${v.code} (unconfirmed)`;
+/** With part numbers hidden the suffix code is dropped too: the label (ياباني / DENSO) is enough. */
+function variantLabel(v: StockVariantView, lang: Lang, showCodes: boolean): string {
+  const label = lang === "ar" ? v.labelAr : v.labelEn;
+  const unconf = lang === "ar" ? "غير مؤكد" : "unconfirmed";
+  if (!showCodes) {
+    if (v.kind === "origin" || v.kind === "brand") return `${label}${v.unconfirmed ? ` (${unconf})` : ""}`;
+    return lang === "ar" ? `بديل آخر (${unconf})` : `other variant (${unconf})`;
+  }
+  if (v.kind === "origin") return `${label} (${v.code})${v.unconfirmed ? ` ${unconf}` : ""}`;
+  if (v.kind === "brand") return `${label}${v.unconfirmed ? ` (${v.code}${lang === "ar" ? "، " : ", "}${unconf})` : ""}`;
+  return lang === "ar" ? `رمز ${v.code} (${unconf})` : `code ${v.code} (${unconf})`;
 }
 
 function stockLines(item: PartLine, lang: Lang): string[] {
   const s = item.stock;
   if (!s) return [];
+  const showCodes = item.partNumber !== null;
   const out: string[] = [];
-  if (s.exact) out.push(lang === "ar" ? `  نفس الرقم: ${qtyText(s.exact, lang)}` : `  Same number: ${qtyText(s.exact, lang)}`);
-  if (s.variants.length > 0) {
-    out.push(lang === "ar" ? "  بدائل بنفس الرقم الأساسي:" : "  Variants of the same base number:");
-    for (const v of s.variants) out.push(`  - ${variantLabel(v, lang)}: ${qtyText(v, lang)}`);
+  const exact = s.exact ? qtyText(s.exact, s.display, lang) : null;
+  if (exact) {
+    const label = showCodes ? (lang === "ar" ? "نفس الرقم" : "Same number") : lang === "ar" ? "نفس القطعة" : "This part";
+    out.push(`  ${label}: ${exact}`);
+  }
+  const variants = s.variants.flatMap((v) => {
+    const q = qtyText(v, s.display, lang);
+    return q ? [`  - ${variantLabel(v, lang, showCodes)}: ${q}`] : [];
+  });
+  if (variants.length > 0) {
+    out.push(showCodes ? (lang === "ar" ? "  بدائل بنفس الرقم الأساسي:" : "  Variants of the same base number:") : lang === "ar" ? "  بدائل للقطعة نفسها:" : "  Alternatives for the same part:");
+    out.push(...variants);
   }
   return out;
+}
+
+function partsHeader(items: PartLine[], lang: Lang): string {
+  const one = items.length === 1;
+  if (items.some((i) => i.partNumber !== null)) {
+    if (lang === "ar") return one ? "حسب الكتالوج، رقم القطعة لسيارتك:" : "حسب الكتالوج، أرقام القطع لسيارتك:";
+    return one ? "According to the catalogue, the part number for your car:" : "According to the catalogue, the part numbers for your car:";
+  }
+  if (lang === "ar") return one ? "حسب الكتالوج، القطعة المناسبة لسيارتك:" : "حسب الكتالوج، القطع المناسبة لسيارتك:";
+  return one ? "According to the catalogue, the part that fits your car:" : "According to the catalogue, the parts that fit your car:";
 }
 
 function stockFooter(f: StockFooter | null, lang: Lang): string[] {
@@ -135,7 +180,8 @@ function stockFooter(f: StockFooter | null, lang: Lang): string[] {
     out.push(lang === "ar" ? `بيانات المخزون قديمة (آخر تحديث ${f.asOf})، الموظف يؤكد لك التوفر.` : `Stock data is old (last update ${f.asOf}); our staff will confirm availability.`);
   } else {
     const vat = f.pricesShown ? (lang === "ar" ? " الأسعار شاملة الضريبة." : " Prices include VAT.") : "";
-    out.push(lang === "ar" ? `المخزون حسب تحديث ${f.asOf}.${vat} الموظف يؤكد لك التوفر.` : `Stock as of ${f.asOf}.${vat} Our staff will confirm availability.`);
+    if (f.stockShown) out.push(lang === "ar" ? `المخزون حسب تحديث ${f.asOf}.${vat} الموظف يؤكد لك التوفر.` : `Stock as of ${f.asOf}.${vat} Our staff will confirm availability.`);
+    else out.push(lang === "ar" ? `الأسعار حسب تحديث ${f.asOf}.${vat} الموظف يؤكد لك التوفر والسعر.` : `Prices as of ${f.asOf}.${vat} Our staff will confirm availability and price.`);
   }
   if (f.synthetic) out.push(lang === "ar" ? "(بيانات تجريبية)" : "(test data)");
   return out;
@@ -225,16 +271,16 @@ export const T = {
   partsQuoted: {
     ar: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean; stock?: StockFooter | null }) =>
       [
-        p.items.length === 1 ? "حسب الكتالوج، رقم القطعة لسيارتك:" : "حسب الكتالوج، أرقام القطع لسيارتك:",
-        ...p.items.flatMap((i) => [`• ${i.name}: ${i.partNumber}`, ...stockLines(i, "ar")]),
+        partsHeader(p.items, "ar"),
+        ...p.items.flatMap((i) => [i.partNumber ? `• ${i.name}: ${i.partNumber}` : `• ${i.name}`, ...stockLines(i, "ar")]),
         ...(p.staffNote ? [`وفيه نتائج ثانية ما تأكد تطابقها، ${CONFIRM_WITH_STAFF_AR}.`] : []),
         ...stockFooter(p.stock ?? null, "ar"),
         ...(p.askAck ? ["وإذا السيارة مو صحيحة رد بـ لا. وتبي قطعة ثانية؟ اكتبها لي."] : ["تبي قطعة ثانية؟ اكتبها لي."]),
       ].join("\n"),
     en: (p: { items: PartLine[]; staffNote: boolean; askAck: boolean; stock?: StockFooter | null }) =>
       [
-        p.items.length === 1 ? "According to the catalogue, the part number for your car:" : "According to the catalogue, the part numbers for your car:",
-        ...p.items.flatMap((i) => [`• ${i.name}: ${i.partNumber}`, ...stockLines(i, "en")]),
+        partsHeader(p.items, "en"),
+        ...p.items.flatMap((i) => [i.partNumber ? `• ${i.name}: ${i.partNumber}` : `• ${i.name}`, ...stockLines(i, "en")]),
         ...(p.staffNote ? [`Other results are not confirmed to fit. ${CONFIRM_WITH_STAFF_EN}.`] : []),
         ...stockFooter(p.stock ?? null, "en"),
         ...(p.askAck ? ["If this isn't your car, reply no. Need another part? Just write it."] : ["Need another part? Just write it."]),
@@ -293,6 +339,22 @@ export const T = {
   capReached: {
     ar: (p: { followUp: string }) => `وصلنا للحد اليومي لرسائل المساعد الآلي. بخلي الموظف يكمل معك. ${p.followUp}`,
     en: (p: { followUp: string }) => `The assistant has reached its daily message limit. Our staff will continue with you. ${p.followUp}`,
+  },
+
+  /**
+   * After hours, `reply_with_note`: appended ONCE per closed period to a normal reply (not to handoff replies,
+   * which already say when staff answer). `when` comes from whenText().
+   */
+  afterHoursNote: {
+    ar: (p: { when: string }) => `⏰ المحل مسكّر الحين، والموظف بيتابع معك ${p.when} بإذن الله.`,
+    en: (p: { when: string }) => `⏰ The shop is closed now; our staff will follow up ${p.when}.`,
+  },
+  /** After hours, `note_only`: the whole reply, ONCE per closed period (later messages wait silently for staff). */
+  afterHoursOnly: {
+    ar: (p: { when: string; shopName: string }) =>
+      `هلا والله 👋 ${p.shopName ? `${p.shopName} مسكّر` : "المحل مسكّر"} الحين، والموظف بيتابع معك ${p.when} بإذن الله.\nاكتب طلبك هنا (رقم الشاصي واسم القطعة) عشان يكون جاهز له.`,
+    en: (p: { when: string; shopName: string }) =>
+      `Hello 👋 ${p.shopName || "The shop"} is closed now; our staff will follow up ${p.when}.\nPlease leave your request here (VIN and part name) so it is ready for them.`,
   },
 
   /** Scope guard (Meta bans general-purpose AI assistants): one polite line, offer staff. */
