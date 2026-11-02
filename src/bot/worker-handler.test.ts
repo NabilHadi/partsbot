@@ -241,6 +241,16 @@ describe("processInboundJob: AI layer", () => {
     expect(b.logs.some((l) => l.event === "alert" && l.fields.code === "ai_provider_unavailable")).toBe(true);
   });
 
+  it("a shop on aiProvider=openrouter uses the openrouter provider", async () => {
+    const def = await aiDeps();
+    const or = await aiDeps();
+    const a = setup({ dryRun: true, shopConfig: { aiEnabled: true, aiProvider: "openrouter" } });
+    await processInboundJob(job("o1", "ابي كرتون الدهن"), { ...a.deps, ...def.extra, aiByProvider: { openrouter: or.extra.ai } });
+    expect(def.provider.calls).toHaveLength(0);
+    expect(or.provider.calls.map((c) => c.stage)).toEqual(["understand", "compose"]);
+    expect(a.logs.some((l) => l.event === "alert" && l.fields.code === "ai_provider_unavailable")).toBe(false);
+  });
+
   it("ai_call logs carry model, tokens, latency, cost and outcome, never the prompt, message or reply", async () => {
     const on = await aiDeps();
     const { deps, logs } = setup({ dryRun: true, shopConfig: { aiEnabled: true } });

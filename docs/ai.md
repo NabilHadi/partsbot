@@ -24,15 +24,15 @@ Scope: shop customer service only (parts, stock, prices, VIN, staff handoff). Of
 
 ## Switches
 
-- **Server**: `AI_ENABLED=true` and the API key of the default provider (`GEMINI_API_KEY` / `DEEPSEEK_API_KEY` in `logs/secrets.env`, mode 600, never printed). If either is missing, every shop runs on rules plus templates.
+- **Server**: `AI_ENABLED=true` and the API key of the default provider (`GEMINI_API_KEY` / `DEEPSEEK_API_KEY` / `OPENROUTER_API_KEY` in `logs/secrets.env`, mode 600, never printed). If either is missing, every shop runs on rules plus templates.
 - **Shop**: `aiEnabled` in the shop config (admin settings or `npm run shop -- set <id> aiEnabled=true`).
   - Default: off.
   - `shop create --test` turns it on for test shops.
-- **Provider per shop**: `aiProvider` = `server_default` (default) | `gemini` | `deepseek`. A provider without a key on the server falls back to the default (alert `ai_provider_unavailable`).
+- **Provider per shop**: `aiProvider` = `server_default` (default) | `gemini` | `deepseek` | `openrouter`. A provider without a key on the server falls back to the default (alert `ai_provider_unavailable`).
 
 ### Providers and models
 
-Both sit behind `AiProvider` (`provider.ts`). A `ChainProvider` makes at most two attempts: the main model, then ONE retry (on timeout, rate limit, overload, empty or bad JSON; also on quota/auth/HTTP errors when the retry goes to another model or provider). Same zod schemas, validators and timeout for every provider.
+All three sit behind `AiProvider` (`provider.ts`). A `ChainProvider` makes at most two attempts: the main model, then ONE retry (on timeout, rate limit, overload, empty or bad JSON; also on quota/auth/HTTP errors when the retry goes to another model or provider). Same zod schemas, validators and timeout for every provider.
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
@@ -43,9 +43,14 @@ Both sit behind `AiProvider` (`provider.ts`). A `ChainProvider` makes at most tw
 | `DEEPSEEK_MODEL`, `DEEPSEEK_FALLBACK_MODEL` | `deepseek-flash`, none | `deepseek-flash` = DeepSeek-V4.1-Flash (V4-Flash is retired; `deepseek-v4-flash` is a legacy alias of the same model) |
 | `DEEPSEEK_THINKING` | `disabled` | `low` / `high` = thinking mode (slower, costs output tokens) |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible |
+| `OPENROUTER_MODEL`, `OPENROUTER_FALLBACK_MODEL` | `google/gemini-3.8-flash`, none | OpenRouter ids from `GET https://openrouter.ai/api/v1/models` |
+| `OPENROUTER_REASONING` | `low` | `none` / `minimal` / `low` / `medium` / `high` (reasoning effort; reasoning text is never returned) |
+| `OPENROUTER_JSON_MODE` | `json_schema` | `json_object` = schema in the system prompt (for models without structured outputs) |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible |
 
 - **Gemini** (`gemini.ts`): REST `generateContent` with a response JSON schema. A 429 with a per-day quota id is reported as `quota` (not retried on the same model).
 - **DeepSeek** (`deepseek.ts`): `POST /chat/completions` with `response_format: json_object`; the JSON schema is appended to the system prompt and the answer is validated with the same zod schema. Errors: 402 = `quota` (no balance), 429 = `rate_limited`, 500/503 = `overloaded`, 401/403 = `auth`. `check()` = `GET /models`.
+- **OpenRouter** (`openrouter.ts`): `POST /chat/completions` with `response_format: json_schema` (strict, the same schema), `provider.require_parameters: true` (route only to endpoints that honour it), `usage: {include: true}` and `HTTP-Referer` / `X-Title: PartsBot`. The billed cost per call (`usage.cost`) is used as is instead of the price table. Errors: 402 = `quota` (no credits), 429 = `rate_limited`, 500/502/503 = `overloaded`, 401 = `auth`, 403 = `blocked` (moderation); a 200 carrying an upstream error is treated as that error. `check()` = `GET /key` + `GET /models`. One key avoids the Gemini free-tier cap of 20 requests/day.
 - **Prices** (`PRICES_PER_M`, for the cost estimate): Gemini from https://ai.google.dev/gemini-api/docs/pricing; DeepSeek from https://api-docs.deepseek.com/quick_start/pricing (deepseek-flash peak: input $0.30 per 1M on a cache miss, $0.006 on a cache hit, output $1.20; off-peak half. Peak = 01:00–04:00 and 06:00–10:00 UTC Mon–Fri = 04:00–07:00 and 09:00–13:00 Riyadh).
 
 ### Health on /admin/app
@@ -73,7 +78,7 @@ Every model attempt is stored in `ai_attempts` (provider, model, stage, attempt,
 
 The provider and models come from the same env vars as the app (e.g. `AI_PROVIDER=deepseek npm run eval-ai`). Cost is printed at the peak price and, for DeepSeek, off-peak too.
 
-Results (2026-11-02, saved in `/workspace/partsbot-data/eval-ai-*.txt`): deepseek-flash 102/104, understand p50 1.2 s / p90 1.4 s; gemini-3.1-flash-lite 100/104 with the old timeout (103/104 after re-running the 3 slang timeouts with 25 s).
+Results (2026-11-02, saved in `/workspace/partsbot-data/eval-ai-*.txt`): OpenRouter `google/gemini-3.8-flash` (reasoning low) 102/104, understand p50 2.1 s / p95 3.5 s, $0.0009 per understand call, $0.0018 per full message; deepseek-flash 102/104, understand p50 1.2 s / p90 1.4 s; gemini-3.1-flash-lite 100/104 with the old timeout (103/104 after re-running the 3 slang timeouts with 25 s).
 
 Unit tests mock the model (`src/ai/testkit.ts`).
 

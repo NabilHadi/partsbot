@@ -44,7 +44,7 @@ const envSchema = z
     .optional()
     .transform((v) => (v ?? "").trim().toLowerCase() === "true"),
   /** Server-default provider. A shop can override it with its `aiProvider` setting (e.g. the test shop on DeepSeek). */
-  AI_PROVIDER: z.enum(["gemini", "deepseek"]).default("gemini"),
+  AI_PROVIDER: z.enum(["gemini", "deepseek", "openrouter"]).default("gemini"),
   /**
    * Optional cross-provider retry: when set and different from the provider in use, the ONE retry goes to this
    * provider's main model (e.g. DeepSeek first, Gemini Flash-Lite on retry). Unset = retry within the same provider.
@@ -53,7 +53,7 @@ const envSchema = z
     .string()
     .optional()
     .transform((v) => (v && v.trim() ? v.trim() : null))
-    .pipe(z.enum(["gemini", "deepseek"]).nullable()),
+    .pipe(z.enum(["gemini", "deepseek", "openrouter"]).nullable()),
   /** Per model call; one retry. */
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(25000),
   /** Gemini model ids as listed by models.list. GEMINI_FALLBACK_MODEL = model for the same-provider retry. */
@@ -69,6 +69,16 @@ const envSchema = z
   DEEPSEEK_BASE_URL: z.string().url().default("https://api.deepseek.com"),
   /** Never logged or shown. */
   DEEPSEEK_API_KEY: z.string().min(1).optional(),
+  /** OpenRouter (OpenAI-compatible, many models behind one key). Model ids as listed by GET /api/v1/models. */
+  OPENROUTER_MODEL: z.string().min(1).default("google/gemini-3.8-flash"),
+  OPENROUTER_FALLBACK_MODEL: OPT_STR,
+  /** Reasoning effort for thinking models; "none" = off. Default low (like the direct Gemini provider). */
+  OPENROUTER_REASONING: z.enum(["none", "minimal", "low", "medium", "high"]).default("low"),
+  /** json_schema (structured outputs, default) | json_object (schema in the prompt). */
+  OPENROUTER_JSON_MODE: z.enum(["json_schema", "json_object"]).default("json_schema"),
+  OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
+  /** Never logged or shown. */
+  OPENROUTER_API_KEY: z.string().min(1).optional(),
   })
   .superRefine((env, ctx) => {
     if (env.ONEEPC_DECODE_SOURCE !== env.ONEEPC_SEARCH_SOURCE) {

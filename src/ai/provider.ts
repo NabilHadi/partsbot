@@ -1,6 +1,6 @@
 /**
  * Provider-neutral model interface. The bot only ever asks for ONE JSON object that matches a JSON schema;
- * the provider turns that into its own API call (Gemini and DeepSeek today; any other backend fits the same interface).
+ * the provider turns that into its own API call (Gemini, DeepSeek and OpenRouter today; any other backend fits the same interface).
  *
  * Errors are typed and never carry the API key, the prompt or the model's text: only a short reason code.
  */
@@ -12,6 +12,8 @@ export interface AiUsage {
   outputTokens: number;
   /** Input tokens served from the provider's prompt cache (DeepSeek bills them much lower). Part of inputTokens. */
   cachedInputTokens?: number;
+  /** Cost the provider itself reported in USD (OpenRouter `usage.cost`). When set, costUsd() uses it instead of the price table. */
+  costUsd?: number;
 }
 
 export interface JsonRequest {
@@ -166,6 +168,7 @@ function addUsage(total: AiUsage, u: AiUsage): void {
   total.inputTokens += u.inputTokens;
   total.outputTokens += u.outputTokens;
   total.cachedInputTokens = (total.cachedInputTokens ?? 0) + (u.cachedInputTokens ?? 0);
+  if (u.costUsd !== undefined) total.costUsd = (total.costUsd ?? 0) + u.costUsd;
 }
 
 /** USD per 1M tokens, for the cost estimate in logs/eval. Update with the provider's price page. */
@@ -195,10 +198,16 @@ export const PRICES_PER_M: Record<string, Price> = {
   // deepseek-flash = DeepSeek-V4.1-Flash; legacy "deepseek-v4-flash" routes to it and bills the same.
   "deepseek-flash": { input: 0.3, cachedInput: 0.006, output: 1.2, offPeak: { factor: 0.5, isPeak: deepseekIsPeak } },
   "deepseek-v4-flash": { input: 0.3, cachedInput: 0.006, output: 1.2, offPeak: { factor: 0.5, isPeak: deepseekIsPeak } },
+  // OpenRouter ids (GET https://openrouter.ai/api/v1/models, checked 2026-11-02). Only a fallback estimate: OpenRouter
+  // reports the billed cost per call (usage.cost), which costUsd() prefers.
+  "google/gemini-3.8-flash": { input: 0.825, cachedInput: 0.0825, output: 4.125 },
+  "google/gemini-3.1-flash-lite": { input: 0.25, cachedInput: 0.025, output: 1.5 },
+  "google/gemini-3.5-flash-lite": { input: 0.3, cachedInput: 0.03, output: 2.5 },
 };
 
 /** Estimated cost. `at` picks peak/off-peak where the provider has it; without `at`, the (higher) peak price. */
 export function costUsd(model: string, u: AiUsage, at?: Date): number | null {
+  if (typeof u.costUsd === "number" && Number.isFinite(u.costUsd)) return u.costUsd;
   const p = PRICES_PER_M[model];
   if (!p) return null;
   const cached = Math.min(u.cachedInputTokens ?? 0, u.inputTokens);

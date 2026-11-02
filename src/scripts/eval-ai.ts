@@ -1,8 +1,8 @@
 /**
  * Offline eval of the AI layer against the REAL model (costs a few cents). Run: npm run eval-ai
- *   Same AI settings as the app (never printed): AI_PROVIDER=gemini|deepseek, AI_FALLBACK_PROVIDER, GEMINI_MODEL / GEMINI_FALLBACK_MODEL,
- *   DEEPSEEK_MODEL / DEEPSEEK_FALLBACK_MODEL / DEEPSEEK_THINKING, AI_TIMEOUT_MS, and the provider's API key.
- *   Cost is printed at the peak price and, for providers with an off-peak discount (DeepSeek), off-peak too.
+ *   Same AI settings as the app (never printed): AI_PROVIDER=gemini|deepseek|openrouter, AI_FALLBACK_PROVIDER, GEMINI_MODEL / GEMINI_FALLBACK_MODEL,
+ *   DEEPSEEK_MODEL / DEEPSEEK_FALLBACK_MODEL / DEEPSEEK_THINKING, OPENROUTER_MODEL / OPENROUTER_FALLBACK_MODEL / OPENROUTER_REASONING, AI_TIMEOUT_MS, and the provider's API key.
+ *   OpenRouter reports the billed cost per call; that is used as is. Cost is printed at the peak price and, for providers with an off-peak discount (DeepSeek), off-peak too.
  *   EVAL_ONLY=slang,typos to run some categories, EVAL_IDS=pipe-02 for single cases, EVAL_CONCURRENCY (default 4), EVAL_DELAY_MS (pause between calls),
  *   EVAL_OUT=path.json for the raw results.
  * Understand cases call stage 1 directly; "pipeline" cases run the whole engine (AI + synonyms + mock OneEPC + compose)
@@ -96,7 +96,7 @@ async function runPipeline(provider: AiProvider, c: Case, mockClient: Awaited<Re
   for (const a of calls) if (!a.ok && a.stage === "understand") why.push(`understand failed: ${a.reason}`);
   const compose = calls.find((a) => a.stage === "compose");
   const latencyMs = calls.reduce((s, a) => s + a.latencyMs, 0);
-  const costs = calls.map((a) => cost2(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0 }));
+  const costs = calls.map((a) => cost2(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0, ...(a.costUsd !== undefined ? { costUsd: a.costUsd } : {}) }));
   const cost = costs.reduce((s, x) => s + x.peak, 0);
   const costOff = costs.reduce((s, x) => s + x.off, 0);
   return {
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
     const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
     const sorted = und.map((r) => r.latencyMs).sort((a, b) => a - b);
     const offTxt = (rs: Outcome[]) => (rs.some((r) => r.costOffPeakUsd !== r.costUsd) ? ` (off-peak $${avg(rs.map((r) => r.costOffPeakUsd)).toFixed(6)})` : "");
-    console.log(`\nunderstand call: avg ${Math.round(avg(sorted))} ms, p50 ${sorted[Math.floor(sorted.length / 2)] ?? 0} ms, p90 ${sorted[Math.floor(sorted.length * 0.9)] ?? 0} ms, max ${sorted.at(-1) ?? 0} ms; avg cost $${avg(und.map((r) => r.costUsd)).toFixed(6)}${offTxt(und)}`);
+    console.log(`\nunderstand call: avg ${Math.round(avg(sorted))} ms, p50 ${sorted[Math.floor(sorted.length / 2)] ?? 0} ms, p90 ${sorted[Math.floor(sorted.length * 0.9)] ?? 0} ms, p95 ${sorted[Math.floor(sorted.length * 0.95)] ?? 0} ms, max ${sorted.at(-1) ?? 0} ms; avg cost $${avg(und.map((r) => r.costUsd)).toFixed(6)}${offTxt(und)}`);
     if (pipe.length) {
       const ps = pipe.map((r) => r.latencyMs).sort((a, b) => a - b);
       console.log(`full message (understand + compose): avg ${Math.round(avg(ps))} ms, p50 ${ps[Math.floor(ps.length / 2)] ?? 0} ms, p90 ${ps[Math.floor(ps.length * 0.9)] ?? 0} ms, avg cost $${avg(pipe.map((r) => r.costUsd)).toFixed(6)}${offTxt(pipe)}, avg ${avg(pipe.map((r) => r.calls)).toFixed(1)} calls`);

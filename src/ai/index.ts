@@ -1,7 +1,8 @@
-/** The AI bundle the engine receives (EngineDeps.ai). Provider-neutral: Gemini and DeepSeek behind AiProvider. */
+/** The AI bundle the engine receives (EngineDeps.ai). Provider-neutral: Gemini, DeepSeek and OpenRouter behind AiProvider. */
 import { ChainProvider, type AiBackend, type AiProvider, type AttemptObserver } from "./provider.js";
 import { GeminiBackend } from "./gemini.js";
 import { DeepSeekBackend } from "./deepseek.js";
+import { OpenRouterBackend, type OpenRouterReasoning } from "./openrouter.js";
 import { composeReply, type ComposeInput, type ComposeOutcome } from "./compose.js";
 import { selectCandidates, type SelectInput, type SelectOutcome } from "./select.js";
 import { understandMessage, type UnderstandInput, type UnderstandOutcome } from "./understand.js";
@@ -22,7 +23,7 @@ export function engineAi(provider: AiProvider): EngineAi {
   };
 }
 
-export const AI_PROVIDERS = ["gemini", "deepseek"] as const;
+export const AI_PROVIDERS = ["gemini", "deepseek", "openrouter"] as const;
 export type AiProviderName = (typeof AI_PROVIDERS)[number];
 
 export interface AiConfigLike {
@@ -38,6 +39,18 @@ export interface AiConfigLike {
   DEEPSEEK_THINKING?: "disabled" | "low" | "high";
   DEEPSEEK_BASE_URL?: string;
   DEEPSEEK_API_KEY?: string | undefined;
+  OPENROUTER_MODEL?: string;
+  OPENROUTER_FALLBACK_MODEL?: string | null;
+  OPENROUTER_REASONING?: OpenRouterReasoning;
+  OPENROUTER_JSON_MODE?: "json_schema" | "json_object";
+  OPENROUTER_BASE_URL?: string;
+  OPENROUTER_API_KEY?: string | undefined;
+}
+
+export const OPENROUTER_DEFAULT_MODEL = "google/gemini-3.8-flash";
+
+function mainModel(cfg: AiConfigLike, name: AiProviderName): string {
+  return name === "gemini" ? cfg.GEMINI_MODEL : name === "deepseek" ? (cfg.DEEPSEEK_MODEL ?? "deepseek-flash") : (cfg.OPENROUTER_MODEL ?? OPENROUTER_DEFAULT_MODEL);
 }
 
 /** What /admin/app shows per provider chain (never a key). */
@@ -70,13 +83,23 @@ export function createAiFromConfig(cfg: AiConfigLike, observer?: AttemptObserver
       fallbackModel: cfg.DEEPSEEK_FALLBACK_MODEL ?? null,
     };
   }
+  if (cfg.OPENROUTER_API_KEY) {
+    backends.openrouter = {
+      backend: new OpenRouterBackend({
+        apiKey: cfg.OPENROUTER_API_KEY, timeoutMs: cfg.AI_TIMEOUT_MS, reasoning: cfg.OPENROUTER_REASONING ?? "low", jsonMode: cfg.OPENROUTER_JSON_MODE ?? "json_schema",
+        ...(cfg.OPENROUTER_BASE_URL ? { baseUrl: cfg.OPENROUTER_BASE_URL } : {}),
+      }),
+      model: mainModel(cfg, "openrouter"),
+      fallbackModel: cfg.OPENROUTER_FALLBACK_MODEL ?? null,
+    };
+  }
   const byProvider: Partial<Record<AiProviderName, AiProvider>> = {};
   const chains: AiChainInfo[] = [];
   const order = [cfg.AI_PROVIDER, ...AI_PROVIDERS.filter((p) => p !== cfg.AI_PROVIDER)];
   for (const name of order) {
     const b = backends[name];
     if (!b) {
-      if (name === cfg.AI_PROVIDER) chains.push({ provider: name, model: name === "gemini" ? cfg.GEMINI_MODEL : (cfg.DEEPSEEK_MODEL ?? "deepseek-flash"), fallbackProvider: null, fallbackModel: null, keyConfigured: false });
+      if (name === cfg.AI_PROVIDER) chains.push({ provider: name, model: mainModel(cfg, name), fallbackProvider: null, fallbackModel: null, keyConfigured: false });
       continue;
     }
     const other = cfg.AI_FALLBACK_PROVIDER && cfg.AI_FALLBACK_PROVIDER !== name ? backends[cfg.AI_FALLBACK_PROVIDER] : undefined;

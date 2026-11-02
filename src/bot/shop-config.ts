@@ -117,7 +117,7 @@ export type StockDisplay = (typeof STOCK_DISPLAY)[number];
 export const AFTER_HOURS_MODES = ["reply_with_note", "note_only"] as const;
 export type AfterHoursMode = (typeof AFTER_HOURS_MODES)[number];
 
-export const AI_PROVIDER_CHOICES = ["server_default", "gemini", "deepseek"] as const;
+export const AI_PROVIDER_CHOICES = ["server_default", "gemini", "deepseek", "openrouter"] as const;
 
 export const shopConfigSchema = z.strictObject({
   // ---- what the customer is shown ----

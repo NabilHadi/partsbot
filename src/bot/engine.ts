@@ -102,6 +102,8 @@ export type BotAction =
       outputTokens: number;
       /** Input tokens served from the provider's cache (priced lower); part of inputTokens. */
       cachedInputTokens?: number;
+      /** Cost reported by the provider (OpenRouter), when it reports one. */
+      costUsd?: number;
       intent?: string;
       parts?: number;
       validator?: string | null;
@@ -460,7 +462,7 @@ async function aiSelect(t: Turn, query: string, confirmed: PartResult[]): Promis
     query,
     candidates: confirmed.map((c, index) => ({ index, nameAr: c.name.ar, nameEn: c.name.en, category: c.category.ar ?? c.category.en ?? null })),
   });
-  t.actions.push({ type: "ai_call", stage: "select", ok: r.ok, reason: r.ok ? null : r.reason, model: r.model, latencyMs: r.latencyMs, inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens, cachedInputTokens: r.usage.cachedInputTokens ?? 0 });
+  t.actions.push({ type: "ai_call", stage: "select", ok: r.ok, reason: r.ok ? null : r.reason, model: r.model, latencyMs: r.latencyMs, inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens, cachedInputTokens: r.usage.cachedInputTokens ?? 0, ...(r.usage.costUsd !== undefined ? { costUsd: r.usage.costUsd } : {}) });
   if (!r.ok) return null;
   if (r.keep.length > 0) return { keep: [...r.keep].sort((a, b) => a - b).map((i) => confirmed[i]!) };
   return r.question ? { question: r.question } : null;
@@ -688,7 +690,7 @@ export async function handleInbound(state: ConversationState | null, inboundText
     });
     t.actions.push({
       type: "ai_call", stage: "understand", ok: u.ok, reason: u.ok ? null : u.reason, model: u.model, latencyMs: u.latencyMs,
-      inputTokens: u.usage.inputTokens, outputTokens: u.usage.outputTokens, cachedInputTokens: u.usage.cachedInputTokens ?? 0,
+      inputTokens: u.usage.inputTokens, outputTokens: u.usage.outputTokens, cachedInputTokens: u.usage.cachedInputTokens ?? 0, ...(u.usage.costUsd !== undefined ? { costUsd: u.usage.costUsd } : {}),
       ...(u.ok ? { intent: u.data.intent, parts: u.data.parts.length } : {}),
     });
     if (u.ok) {
@@ -805,7 +807,7 @@ async function composeTurn(t: Turn): Promise<void> {
   const r = await ai.compose({ lang: t.lang, shopName: t.deps.shop.shopName, customerText: t.customerText, draft });
   t.actions.push({
     type: "ai_call", stage: "compose", ok: r.ok, reason: r.ok ? null : r.reason, model: r.model, latencyMs: r.latencyMs,
-    inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens, cachedInputTokens: r.usage.cachedInputTokens ?? 0, validator: r.ok ? "pass" : r.validator,
+    inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens, cachedInputTokens: r.usage.cachedInputTokens ?? 0, ...(r.usage.costUsd !== undefined ? { costUsd: r.usage.costUsd } : {}), validator: r.ok ? "pass" : r.validator,
   });
   if (!r.ok) return;
   const final = t.partsBlock ? r.text.split(PARTS_PLACEHOLDER).join(t.partsBlock) : r.text;

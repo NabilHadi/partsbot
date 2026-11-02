@@ -190,7 +190,7 @@ function logActions(log: NonNullable<WorkerHandlerDeps["log"]>, ids: LogFields, 
         log("ai_call", {
           ...ids, stage: a.stage, ok: a.ok, reason: a.reason, model: a.model, latencyMs: a.latencyMs,
           inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0,
-          costUsd: ((c) => (c === null ? null : Number(c.toFixed(6))))(costUsd(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0 }, new Date())),
+          costUsd: ((c) => (c === null ? null : Number(c.toFixed(6))))(costUsd(a.model, { inputTokens: a.inputTokens, outputTokens: a.outputTokens, cachedInputTokens: a.cachedInputTokens ?? 0, ...(a.costUsd !== undefined ? { costUsd: a.costUsd } : {}) }, new Date())),
           intent: a.intent, parts: a.parts, validator: a.validator,
         });
         break;
