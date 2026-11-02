@@ -9,8 +9,11 @@ export interface InboundQueue {
 
 /** Customer text and phone numbers sit in job.data, so keep finished jobs only briefly (PDPL). */
 const JOB_RETENTION_SECONDS = 3 * 24 * 3600;
-/** Belt and braces on top of the Postgres dedupe table: pg-boss throttles identical singletonKeys within a slot. */
-const SINGLETON_SECONDS = 24 * 3600;
+/**
+ * Belt and braces on top of the Postgres dedupe table: pg-boss throttles identical singletonKeys within a slot.
+ * pg-boss 10 rejects send() when singletonSeconds exceeds archiveCompletedAfterSeconds (default 12h), so 12h is the max.
+ */
+export const SINGLETON_SECONDS = 12 * 3600;
 
 export function createPgBossInboundQueue(boss: PgBoss): InboundQueue {
   return {
